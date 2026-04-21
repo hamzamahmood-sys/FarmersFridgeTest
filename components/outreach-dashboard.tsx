@@ -184,6 +184,29 @@ function locationToProspectCompany(location: SavedLocation): ProspectCompany {
   };
 }
 
+function companyToPreviewLocation(company: ProspectCompany): SavedLocation {
+  return {
+    id: `preview:${company.id}`,
+    organizationId: company.id,
+    companyName: company.name,
+    companyDomain: company.domain,
+    industry: company.company.industry,
+    employeeCount: company.company.employeeCount,
+    hqCity: company.company.hqCity,
+    hqState: company.company.hqState,
+    hqCountry: company.company.hqCountry,
+    about: company.company.about,
+    category: company.company.industry,
+    locationType: "other",
+    pipelineStage: "prospect",
+    pitchType: "farmers_fridge",
+    notes: "",
+    deliveryZone: company.company.deliveryZone,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+}
+
 function formatCompanyMeta(company: {
   hqCity?: string;
   hqState?: string;
@@ -196,6 +219,14 @@ function formatCompanyMeta(company: {
 
 function getStatusClass(status: Exclude<EmailFilter, "all">) {
   return `statusBadge statusBadge--${status}`;
+}
+
+function isPreviewLocationId(locationId: string | null | undefined): boolean {
+  return Boolean(locationId?.startsWith("preview:"));
+}
+
+function isPipelineStorageError(message: string): boolean {
+  return /relation "saved_locations" does not exist|relation "emails" does not exist/i.test(message);
 }
 
 export function OutreachDashboard() {
@@ -276,6 +307,7 @@ export function OutreachDashboard() {
   const currentLocation = locationDetail?.location ?? null;
   const currentContacts = locationDetail?.contacts ?? [];
   const currentLocationEmails = locationDetail?.emails ?? [];
+  const isPreviewLocation = isPreviewLocationId(currentLocation?.id);
 
   const visibleLocations = useMemo(() => {
     return locations.filter((location) => {
@@ -472,13 +504,45 @@ export function OutreachDashboard() {
     return data.location;
   }
 
+  async function handleSaveCompanyToPipeline(company: ProspectCompany) {
+    try {
+      await saveCompanyToPipeline(company);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to save location.";
+      setPageError(
+        isPipelineStorageError(message)
+          ? "Pipeline saving is unavailable because the database migration has not been run yet."
+          : message
+      );
+    }
+  }
+
   async function handleOpenCompany(company: ProspectCompany) {
     try {
       const location = await saveCompanyToPipeline(company);
       await openLocation(location.id);
       await loadContactsForLocation(location);
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : "Failed to open company.");
+      const message = error instanceof Error ? error.message : "Failed to open company.";
+
+      if (isPipelineStorageError(message)) {
+        const previewLocation = companyToPreviewLocation(company);
+        setSelectedLocationId(previewLocation.id);
+        setLocationDetail({ location: previewLocation, contacts: [], emails: [] });
+        setExpandedLeadId(null);
+        setResearchByLeadId({});
+        setEmailLookupStateByLeadId({});
+        setEmailSourceByLeadId({});
+        setContactSearch("");
+        setDepartmentFilter("all");
+        setActivePage("contacts");
+        setPageError(null);
+        setPageSuccess("Opened in preview mode. Pipeline saving is unavailable until the database migration is run.");
+        await loadContactsForLocation(previewLocation);
+        return;
+      }
+
+      setPageError(message);
     }
   }
 
@@ -500,7 +564,7 @@ export function OutreachDashboard() {
             industryQuery: query || location.companyName
           },
           searchQuery: query || location.companyName,
-          locationId: location.id
+          locationId: isPreviewLocationId(location.id) ? undefined : location.id
         })
       });
 
@@ -830,6 +894,10 @@ export function OutreachDashboard() {
   async function queueLeadSequence(record: LeadRecord) {
     const location = currentLocation;
     if (!location) return;
+    if (isPreviewLocation) {
+      setPageError("This company is open in preview mode. Run the database migration first to queue email sequences.");
+      return;
+    }
 
     setPageError(null);
     setPageSuccess(null);
@@ -930,6 +998,10 @@ export function OutreachDashboard() {
 
   async function saveLocationNotes() {
     if (!currentLocation) return;
+    if (isPreviewLocation) {
+      setPageError("Preview mode is read-only. Run the database migration first to save notes.");
+      return;
+    }
 
     startSaveTransition(async () => {
       try {
@@ -957,6 +1029,10 @@ export function OutreachDashboard() {
     value: PipelineStage | LocationType | PitchType
   ) {
     if (!currentLocation) return;
+    if (isPreviewLocation) {
+      setPageError("Preview mode is read-only. Run the database migration first to update pipeline fields.");
+      return;
+    }
 
     try {
       const response = await fetch(`/api/locations/${currentLocation.id}`, {
@@ -977,6 +1053,14 @@ export function OutreachDashboard() {
   }
 
   async function deleteLocation(locationId: string) {
+    if (isPreviewLocationId(locationId)) {
+      setSelectedLocationId(null);
+      setLocationDetail(null);
+      setExpandedLeadId(null);
+      setPageSuccess("Closed preview.");
+      return;
+    }
+
     try {
       const response = await fetch(`/api/locations/${locationId}`, {
         method: "DELETE"
@@ -1500,7 +1584,7 @@ export function OutreachDashboard() {
                       <span>{formatCompanyMeta(company.company) || "Location unavailable"}</span>
                     </div>
                     <div className="cardActionRow">
-                      <button className="secondaryButton" type="button" onClick={() => void saveCompanyToPipeline(company)}>
+                      <button className="secondaryButton" type="button" onClick={() => void handleSaveCompanyToPipeline(company)}>
                         Save to Pipeline
                       </button>
                       <button className="primaryButton" type="button" onClick={() => void handleOpenCompany(company)}>
@@ -1629,6 +1713,7 @@ export function OutreachDashboard() {
               <label>Pipeline</label>
               <select
                 value={currentLocation.pipelineStage}
+                disabled={isPreviewLocation}
                 onChange={(event) => void updateCurrentLocationField("pipelineStage", event.target.value as PipelineStage)}
               >
                 {(Object.keys(PIPELINE_STAGE_LABELS) as PipelineStage[]).map((stage) => (
@@ -1643,6 +1728,7 @@ export function OutreachDashboard() {
               <label>Type</label>
               <select
                 value={currentLocation.locationType}
+                disabled={isPreviewLocation}
                 onChange={(event) => void updateCurrentLocationField("locationType", event.target.value as LocationType)}
               >
                 {(Object.keys(LOCATION_TYPE_LABELS) as LocationType[]).map((type) => (
@@ -1659,6 +1745,7 @@ export function OutreachDashboard() {
               <label>Pitch</label>
               <select
                 value={currentLocation.pitchType}
+                disabled={isPreviewLocation}
                 onChange={(event) => void updateCurrentLocationField("pitchType", event.target.value as PitchType)}
               >
                 {(Object.keys(PITCH_TYPE_LABELS) as PitchType[]).map((pitchType) => (
@@ -1684,6 +1771,11 @@ export function OutreachDashboard() {
               <span>{currentContacts.length} contacts loaded</span>
               <span>{currentLocationEmails.length} queued emails</span>
             </div>
+            {isPreviewLocation ? (
+              <p className="helperText">
+                Preview mode is active because pipeline storage is not available yet. You can review contacts and run research, but notes, pipeline fields, and queued emails are disabled until the DB migration is run.
+              </p>
+            ) : null}
           </article>
 
           <article className="dashboardPanel">
@@ -1692,13 +1784,14 @@ export function OutreachDashboard() {
               className="detailNotes"
               value={notesDraft}
               onChange={(event) => setNotesDraft(event.target.value)}
+              disabled={isPreviewLocation}
               placeholder="Capture account context, food access notes, stakeholder hints, and operational cues here..."
             />
             <div className="inlineActions">
-              <button className="secondaryButton" type="button" onClick={() => setNotesDraft(currentLocation.notes || "")}>
+              <button className="secondaryButton" type="button" onClick={() => setNotesDraft(currentLocation.notes || "")} disabled={isPreviewLocation}>
                 Reset
               </button>
-              <button className="primaryButton" type="button" onClick={() => void saveLocationNotes()} disabled={savePending}>
+              <button className="primaryButton" type="button" onClick={() => void saveLocationNotes()} disabled={savePending || isPreviewLocation}>
                 {savePending ? "Saving..." : "Save Notes"}
               </button>
             </div>
@@ -1822,7 +1915,7 @@ export function OutreachDashboard() {
                           className={`iconButton${hasQueuedEmails ? " iconButton--done" : ""}`}
                           type="button"
                           onClick={() => void queueLeadSequence(record)}
-                          disabled={draftPending || isFindingEmail}
+                          disabled={draftPending || isFindingEmail || isPreviewLocation}
                           title={hasQueuedEmails ? "Replace queued email sequence" : "Queue 3-email sequence"}
                         >
                           <Mail size={16} />
@@ -1877,7 +1970,7 @@ export function OutreachDashboard() {
                                   <RefreshCw size={16} />
                                   Regenerate
                                 </button>
-                                <button className="primaryButton" type="button" onClick={() => void queueLeadSequence(record)}>
+                                <button className="primaryButton" type="button" onClick={() => void queueLeadSequence(record)} disabled={isPreviewLocation}>
                                   <Mail size={16} />
                                   Queue Sequence
                                 </button>
@@ -1913,7 +2006,7 @@ export function OutreachDashboard() {
                                   <Sparkles size={16} />
                                   {pitchPending ? "Researching..." : "Research Contact"}
                                 </button>
-                                <button className="primaryButton" type="button" onClick={() => void queueLeadSequence(record)} disabled={draftPending}>
+                                <button className="primaryButton" type="button" onClick={() => void queueLeadSequence(record)} disabled={draftPending || isPreviewLocation}>
                                   <Mail size={16} />
                                   Queue Sequence
                                 </button>
