@@ -23,6 +23,7 @@ import type {
   ApolloCreditEstimate,
   GeneratedPitch,
   LeadRecord,
+  ProspectCompany,
   SearchFilters
 } from "@/lib/types";
 
@@ -32,9 +33,15 @@ type GmailStatus = {
   expiresAt: number | null;
 };
 
-type SearchResponse = {
-  leads: LeadRecord[];
+type CompanySearchResponse = {
+  companies: ProspectCompany[];
   creditEstimate: ApolloCreditEstimate;
+  fromCache?: boolean;
+};
+
+type CompanyContactsResponse = {
+  company: ProspectCompany;
+  leads: LeadRecord[];
   fromCache?: boolean;
 };
 
@@ -142,6 +149,9 @@ export function OutreachDashboard() {
   const [limitInput, setLimitInput] = useState(String(DEFAULT_SEARCH_FILTERS.limit));
   const [hasSearched, setHasSearched] = useState(false);
   const [creditEstimate, setCreditEstimate] = useState<ApolloCreditEstimate | null>(null);
+  const [companies, setCompanies] = useState<ProspectCompany[]>([]);
+  const [selectedCompany, setSelectedCompany] = useState<ProspectCompany | null>(null);
+  const [companyLoadingId, setCompanyLoadingId] = useState<string | null>(null);
   const [leads, setLeads] = useState<LeadRecord[]>([]);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [pitchError, setPitchError] = useState<string | null>(null);
@@ -259,7 +269,7 @@ export function OutreachDashboard() {
   const researchedCount = Object.keys(researchByLeadId).length;
   const deliveryZoneMatches = leads.filter((lead) => lead.company.deliveryZone !== "Other").length;
   const dashboardStats = [
-    { label: "Leads loaded", value: leads.length },
+    { label: selectedCompany ? "Contacts loaded" : "Companies loaded", value: selectedCompany ? leads.length : companies.length },
     { label: "Researched", value: researchedCount },
     { label: "Drafts queued", value: drafts.length },
     { label: "Zone matches", value: deliveryZoneMatches }
@@ -268,10 +278,10 @@ export function OutreachDashboard() {
   useEffect(() => {
     setCreditEstimate({
       peopleSearchCalls: 1,
-      organizationEnrichCalls: filters.limit,
-      totalEstimatedOperations: 1 + filters.limit,
+      organizationEnrichCalls: 1,
+      totalEstimatedOperations: 2,
       note:
-        "Estimated Apollo usage for this run: one people search plus one enrich call per returned lead. Final billing depends on your Apollo plan."
+        "Search starts with Apollo's organization search, then loads contacts from the company you pick using Apollo's free people search endpoint."
     });
   }, [filters.limit]);
 
@@ -296,6 +306,18 @@ export function OutreachDashboard() {
     setLeads((current) =>
       current.map((record) => (record.lead.id === nextRecord.lead.id ? nextRecord : record))
     );
+  }
+
+  function resetLeadResults() {
+    setLeads([]);
+    setSelectedCompany(null);
+    setResearchByLeadId({});
+    setEmailLookupStateByLeadId({});
+    setEmailSourceByLeadId({});
+    setExpandedLeadId(null);
+    setLeadStatusById({});
+    setBulkResearchProgress(null);
+    setIsBulkResearching(false);
   }
 
   function getEmailDisplay(record: LeadRecord): string {
@@ -391,19 +413,20 @@ export function OutreachDashboard() {
   }
 
   async function runSearch(forceRefresh = false) {
+    void forceRefresh;
     setSearchError(null);
     setPitchError(null);
     setDraftError(null);
     setDraftSuccess(null);
 
     startSearchTransition(async () => {
-      const response = await fetch("/api/leads/search", {
+      const response = await fetch("/api/companies/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...filters, industryQuery: query, forceRefresh })
+        body: JSON.stringify({ ...filters, industryQuery: query })
       });
 
-      const data = (await response.json()) as SearchResponse & { error?: string };
+      const data = (await response.json()) as CompanySearchResponse & { error?: string };
 
       if (!response.ok) {
         setSearchError(data.error || "Search failed.");
@@ -412,12 +435,9 @@ export function OutreachDashboard() {
 
       setHasSearched(true);
       setCreditEstimate(data.creditEstimate);
-      setLeads(data.leads);
-      setResearchByLeadId({});
-      setEmailLookupStateByLeadId({});
-      setEmailSourceByLeadId({});
+      setCompanies(data.companies);
+      resetLeadResults();
       setFromCache(data.fromCache ?? false);
-      setExpandedLeadId(null);
     });
   }
 
@@ -455,13 +475,13 @@ export function OutreachDashboard() {
     };
 
     startSearchTransition(async () => {
-      const response = await fetch("/api/leads/search", {
+      const response = await fetch("/api/companies/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(effectiveFilters)
       });
 
-      const data = (await response.json()) as SearchResponse & { error?: string };
+      const data = (await response.json()) as CompanySearchResponse & { error?: string };
 
       if (!response.ok) {
         setSearchError(data.error || "Search failed.");
@@ -470,13 +490,52 @@ export function OutreachDashboard() {
 
       setHasSearched(true);
       setCreditEstimate(data.creditEstimate);
+      setCompanies(data.companies);
+      resetLeadResults();
+      setFromCache(data.fromCache ?? false);
+      setFilters((current) => ({ ...current, limit: effectiveFilters.limit }));
+    });
+  }
+
+  async function loadCompanyLeads(company: ProspectCompany) {
+    setSearchError(null);
+    setPitchError(null);
+    setDraftError(null);
+    setDraftSuccess(null);
+    setCompanyLoadingId(company.id);
+
+    try {
+      const response = await fetch("/api/leads/by-company", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          company,
+          filters: { ...filters, industryQuery: query },
+          searchQuery: query
+        })
+      });
+
+      const data = (await response.json()) as CompanyContactsResponse & { error?: string };
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to load company contacts.");
+      }
+
+      setSelectedCompany(data.company);
       setLeads(data.leads);
       setResearchByLeadId({});
       setEmailLookupStateByLeadId({});
       setEmailSourceByLeadId({});
       setExpandedLeadId(null);
-      setFilters((current) => ({ ...current, limit: effectiveFilters.limit }));
-    });
+      setLeadStatusById({});
+      setBulkResearchProgress(null);
+      setIsBulkResearching(false);
+      setFromCache(data.fromCache ?? false);
+    } catch (error) {
+      setSearchError(error instanceof Error ? error.message : "Failed to load company contacts.");
+    } finally {
+      setCompanyLoadingId(null);
+    }
   }
 
   async function fetchPitch(
@@ -808,13 +867,16 @@ export function OutreachDashboard() {
 
   function renderSearchPage() {
     const unresearchedCount = leads.filter((r) => !researchByLeadId[r.lead.id]).length;
+    const resultsCountLabel = selectedCompany
+      ? `${leads.length} contacts`
+      : `${companies.length} companies`;
 
     return (
       <>
         <header className="pageHeader">
           <div>
             <h1>Farmer&apos;s Fridge Lead Gen Hub</h1>
-            <p>Find your leads and close some deals — search by company, market, or ICP to surface the right workplace contacts and fire off a personalized pitch.</p>
+            <p>Search companies first, then load the right workplace contacts inside the company you choose and move them into personalized outreach.</p>
           </div>
           <div className="pagePills">
             <button
@@ -841,7 +903,7 @@ export function OutreachDashboard() {
                 <input
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Try: Chicago tech campuses, NYC hospitals, or office parks in New Jersey"
+                  placeholder="Try: Rush Hospital, law firm NYC, or office parks in New Jersey"
                 />
                 <button className="primaryButton" type="button" onClick={() => void runSearch()} disabled={searchPending}>
                   <Search size={16} />
@@ -849,7 +911,7 @@ export function OutreachDashboard() {
                 </button>
               </div>
               <p className="helperText">
-                Tip: search by company type or geography. Chicago, New York City, and New Jersey delivery-zone matches rise to the top automatically.
+                Search by company name, company type, or geography. We&apos;ll show matching companies first, then you can load the best-fit contacts inside one company.
               </p>
             </>
           ) : (
@@ -918,9 +980,9 @@ export function OutreachDashboard() {
           </div>
 
           <div className="filterBarRow">
-            <span className="resultsCount">{leads.length} locations</span>
+            <span className="resultsCount">{resultsCountLabel}</span>
             <div className="filterField">
-              <label>Lead count</label>
+              <label>{selectedCompany ? "Contact count" : "Company count"}</label>
               <input
                 type="text"
                 inputMode="numeric"
@@ -1022,14 +1084,14 @@ export function OutreachDashboard() {
 
         {creditEstimate ? (
           <section className="creditBanner">
-            <strong>Estimated Apollo credit impact: {creditEstimate.totalEstimatedOperations} operations</strong>
+            <strong>Estimated Apollo search flow: {creditEstimate.totalEstimatedOperations} operations</strong>
             <span>{creditEstimate.note}</span>
           </section>
         ) : null}
 
-        {fromCache && leads.length > 0 ? (
+        {fromCache && selectedCompany && leads.length > 0 ? (
           <div className="cacheBanner">
-            <span>Showing cached results — no Apollo credits used.</span>
+            <span>Showing cached contacts for this company.</span>
             <button className="cacheRefreshBtn" type="button" onClick={() => void runSearch(true)} disabled={searchPending}>
               <RefreshCw size={13} /> Refresh from Apollo
             </button>
@@ -1041,278 +1103,382 @@ export function OutreachDashboard() {
         {draftError ? <p className="error">{draftError}</p> : null}
 
         <section className="resultsPanel">
-          {leads.length === 0 ? (
+          {!selectedCompany ? (
+            companies.length === 0 ? (
+              <div className="emptyStateTable">
+                <Building2 size={34} />
+                <p>
+                  {hasSearched
+                    ? `No Apollo companies came back for "${query}". Try a broader market, company name, or location.`
+                    : "Search for an office, hospital, university, law firm, or employer footprint to start building your outreach list."}
+                </p>
+              </div>
+            ) : (
+              <div className="tableWrap">
+                <div className="tableHeader tableHeader--companies">
+                  <span>Company</span>
+                  <span>Location</span>
+                  <span>Industry</span>
+                  <span>Employees</span>
+                  <span>Fit</span>
+                  <span>Actions</span>
+                </div>
+
+                {companies.map((company) => {
+                  const location = [company.company.hqCity, company.company.hqState].filter(Boolean).join(", ");
+
+                  return (
+                    <div key={company.id} className="tableRowGroup">
+                      <div className="tableRow tableRow--companies">
+                        <div className="cell primaryCell">
+                          <div className="nameBlock">
+                            <strong>{company.name}</strong>
+                            <span>{company.domain || "No domain found"}</span>
+                          </div>
+                        </div>
+                        <div className="cell">{location || "Location unavailable"}</div>
+                        <div className="cell">{company.company.industry || "Industry unavailable"}</div>
+                        <div className="cell">{company.company.employeeCount?.toLocaleString() || "Unknown"}</div>
+                        <div className="cell">
+                          <span className="confidencePill">
+                            {company.company.deliveryZone !== "Other" ? "Zone Match" : "General Fit"}
+                          </span>
+                        </div>
+                        <div className="cell actionCell">
+                          <button
+                            className="primaryButton"
+                            type="button"
+                            onClick={() => void loadCompanyLeads(company)}
+                            disabled={companyLoadingId === company.id}
+                          >
+                            <Search size={16} />
+                            {companyLoadingId === company.id ? "Loading..." : "Find Contacts"}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )
+          ) : leads.length === 0 ? (
             <div className="emptyStateTable">
               <Building2 size={34} />
               <p>
-                {hasSearched
-                  ? `No Apollo matches came back for "${query}". Try a broader market, company name, or location.`
-                  : "Search for an office, hospital, university, or employer footprint to start building your outreach list."}
+                No matching contacts came back for {selectedCompany.name}. Try another company, broaden the role filter, or lower the minimum employee count.
               </p>
+              <button
+                className="secondaryButton"
+                type="button"
+                onClick={() => {
+                  setSelectedCompany(null);
+                  setLeads([]);
+                  setExpandedLeadId(null);
+                }}
+              >
+                Back to Companies
+              </button>
             </div>
           ) : (
-            <div className="tableWrap">
-              {/* Toolbar */}
-              <div className="tableToolbar">
-                <div className="tableToolbarLeft">
+            <>
+              <section className="companySelectionBanner">
+                <div>
+                  <strong>{selectedCompany.name}</strong>
+                  <span>
+                    {[
+                      selectedCompany.company.industry,
+                      selectedCompany.company.hqCity,
+                      selectedCompany.company.hqState
+                    ].filter(Boolean).join(" · ") || "Company selected"}
+                  </span>
+                </div>
+                <div className="inlineActions">
+                  {selectedCompany.domain ? (
+                    <a
+                      className="secondaryLink"
+                      href={`https://${selectedCompany.domain}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Visit Site <ArrowUpRight size={14} />
+                    </a>
+                  ) : null}
                   <button
                     className="secondaryButton"
                     type="button"
-                    onClick={() => void researchAllLeads()}
-                    disabled={isBulkResearching || unresearchedCount === 0}
-                    title={unresearchedCount === 0 ? "All leads already researched" : `Research ${unresearchedCount} remaining leads`}
+                    onClick={() => {
+                      setSelectedCompany(null);
+                      setLeads([]);
+                      setExpandedLeadId(null);
+                    }}
                   >
-                    <Zap size={15} />
-                    {isBulkResearching ? "Researching..." : `Research All${unresearchedCount > 0 ? ` (${unresearchedCount})` : ""}`}
+                    Back to Companies
                   </button>
-                  {bulkResearchProgress ? (
-                    <div className="bulkProgressWrap">
-                      <div className="bulkProgressBar">
-                        <div
-                          className="bulkProgressFill"
-                          style={{ width: `${(bulkResearchProgress.completed / bulkResearchProgress.total) * 100}%` }}
-                        />
-                      </div>
-                      <span className="bulkProgressLabel">
-                        {bulkResearchProgress.completed}/{bulkResearchProgress.total}
-                        {bulkResearchProgress.active ? " — researching..." : " complete"}
-                      </span>
-                    </div>
-                  ) : null}
                 </div>
-                <button
-                  className="secondaryButton"
-                  type="button"
-                  onClick={exportLeadsCSV}
-                >
-                  <Download size={15} />
-                  Export CSV
-                </button>
-              </div>
+              </section>
 
-              <div className="tableHeader">
-                <span>Name</span>
-                <span>Email</span>
-                <span>Position</span>
-                <span>Priority</span>
-                <span>Status</span>
-                <span>Actions</span>
-              </div>
-
-              {leads.map((record) => {
-                const research = researchByLeadId[record.lead.id];
-                const isExpanded = expandedLeadId === record.lead.id;
-                const contactStatus = leadStatusById[record.lead.id] || "new";
-                const isResearched = research?.status === "researched";
-                const canDraft = Boolean(record.lead.email);
-                const isFindingEmail = emailLookupLeadId === record.lead.id;
-                const isPreparingDraft = draftPrepLeadId === record.lead.id;
-
-                return (
-                  <div key={record.lead.id} className="tableRowGroup">
-                    <div className="tableRow">
-                      <div className="cell primaryCell">
-                        <div className="nameBlock">
-                          <strong>{record.lead.name}</strong>
-                          <span>{record.lead.companyName}</span>
-                          {isResearched && research?.researchedAt && (
-                            <span className="researchedBadge" title={`Researched on ${new Date(research.researchedAt).toLocaleString()}`}>
-                              ✓ Researched {new Date(research.researchedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                            </span>
-                          )}
+              <div className="tableWrap">
+                <div className="tableToolbar">
+                  <div className="tableToolbarLeft">
+                    <button
+                      className="secondaryButton"
+                      type="button"
+                      onClick={() => void researchAllLeads()}
+                      disabled={isBulkResearching || unresearchedCount === 0}
+                      title={unresearchedCount === 0 ? "All leads already researched" : `Research ${unresearchedCount} remaining leads`}
+                    >
+                      <Zap size={15} />
+                      {isBulkResearching ? "Researching..." : `Research All${unresearchedCount > 0 ? ` (${unresearchedCount})` : ""}`}
+                    </button>
+                    {bulkResearchProgress ? (
+                      <div className="bulkProgressWrap">
+                        <div className="bulkProgressBar">
+                          <div
+                            className="bulkProgressFill"
+                            style={{ width: `${(bulkResearchProgress.completed / bulkResearchProgress.total) * 100}%` }}
+                          />
                         </div>
-                      </div>
-                      <div className="cell mono">
-                        {getEmailDisplay(record)}
-                        {record.lead.email && emailSourceByLeadId[record.lead.id] ? (
-                          <span className={`sourceBadge sourceBadge--${emailSourceByLeadId[record.lead.id]}`}>
-                            {emailSourceByLeadId[record.lead.id] === "apollo"
-                              ? "via Apollo"
-                              : emailSourceByLeadId[record.lead.id] === "tomba"
-                                ? "via Tomba"
-                                : "existing"}
-                          </span>
-                        ) : null}
-                      </div>
-                      <div className="cell">{record.lead.title}</div>
-                      <div className="cell">
-                        <span className="confidencePill">
-                          {record.company.deliveryZone !== "Other" ? "Zone Match" : "General Fit"}
+                        <span className="bulkProgressLabel">
+                          {bulkResearchProgress.completed}/{bulkResearchProgress.total}
+                          {bulkResearchProgress.active ? " — researching..." : " complete"}
                         </span>
-                      </div>
-                      <div className="cell">
-                        <select
-                          className={`statusSelect statusSelect--${contactStatus}`}
-                          value={contactStatus}
-                          onChange={(e) => setLeadStatus(record.lead.id, e.target.value as LeadContactStatus)}
-                        >
-                          {Object.entries(CONTACT_STATUS_LABELS).map(([val, label]) => (
-                            <option key={val} value={val}>{label}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="cell actionCell">
-                        <button
-                          className={`iconButton${isResearched ? " iconButton--done" : ""}`}
-                          type="button"
-                          onClick={() => void researchLead(record, research?.talkingPoints)}
-                          title={isResearched ? "Re-research lead" : "Research lead"}
-                          disabled={pitchPending}
-                        >
-                          <Sparkles size={16} />
-                        </button>
-                        <button
-                          className="iconButton"
-                          type="button"
-                          onClick={() => void approveDraft(record)}
-                          title={
-                            canDraft
-                              ? isPreparingDraft
-                                ? "Preparing draft"
-                                : "Research and move to drafts"
-                              : isPreparingDraft || isFindingEmail
-                                ? "Finding email and preparing draft"
-                                : "Find email, research, and move to drafts"
-                          }
-                          disabled={isPreparingDraft || isFindingEmail}
-                        >
-                          <Mail size={16} />
-                        </button>
-                        <button
-                          className="iconButton"
-                          type="button"
-                          onClick={() => setExpandedLeadId(isExpanded ? null : record.lead.id)}
-                          title={isExpanded ? "Hide lead details" : "Review lead details"}
-                        >
-                          {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                        </button>
-                      </div>
-                    </div>
-
-                    {isExpanded ? (
-                      <div className="researchPanel">
-                        {research ? (
-                          <>
-                            <div className="researchCol">
-                              <h3>Summary</h3>
-                              <p>{research.pitch.summary}</p>
-                            </div>
-                            <div className="researchCol">
-                              <h3>Talking Points</h3>
-                              <textarea
-                                value={research.talkingPoints}
-                                onChange={(event) => updateTalkingPoints(record.lead.id, event.target.value)}
-                              />
-                            </div>
-                            <div className="researchCol">
-                              <h3>Pain Points</h3>
-                              <ul className="plainList">
-                                {research.pitch.painPoints.map((item) => (
-                                  <li key={item}>{item}</li>
-                                ))}
-                              </ul>
-                              {(research.followUp1 || research.followUp2) ? (
-                                <div className="sequenceReadyBadge">
-                                  3-email sequence ready
-                                </div>
-                              ) : (
-                                <div className="sequenceLoadingBadge">
-                                  Generating sequence...
-                                </div>
-                              )}
-                            </div>
-                            <div className="researchFooter">
-                              <div className="microMeta">
-                                <span>Bridge insight: {research.pitch.bridgeInsight}</span>
-                                <span>Specificity anchors: {research.pitch.variableEvidence.join(", ") || "None detected"}</span>
-                                <span>Contact email: {getEmailDisplay(record)}</span>
-                              </div>
-                              <div className="inlineActions">
-                                <button className="secondaryButton" type="button" onClick={() => void rebuildDraftFromTalkingPoints(record)}>
-                                  <RefreshCw size={16} />
-                                  Regenerate
-                                </button>
-                                <button
-                                  className="primaryButton"
-                                  type="button"
-                                  onClick={() => void approveDraft(record)}
-                                  disabled={isFindingEmail || isPreparingDraft}
-                                  title={
-                                    canDraft
-                                      ? "Research is done. Move this lead into drafts."
-                                      : "Find email, then move this researched lead into drafts."
-                                  }
-                                >
-                                  <CircleCheck size={16} />
-                                  {isPreparingDraft
-                                    ? "Preparing Draft..."
-                                    : isFindingEmail
-                                      ? "Finding Email..."
-                                      : canDraft
-                                        ? "Move to Drafts"
-                                        : "Find Email & Move to Drafts"}
-                                </button>
-                              </div>
-                            </div>
-                          </>
-                        ) : (
-                          <>
-                            <div className="researchCol">
-                              <h3>Profile</h3>
-                              <p>{record.lead.name} is {record.lead.title} at {record.lead.companyName}.</p>
-                            </div>
-                            <div className="researchCol">
-                              <h3>Contact Details</h3>
-                              <ul className="plainList">
-                                <li>Email: {getEmailDisplay(record)}</li>
-                                <li>LinkedIn: {record.lead.linkedinUrl || "Not available yet"}</li>
-                                <li>Domain: {record.lead.companyDomain || "Not available yet"}</li>
-                              </ul>
-                            </div>
-                            <div className="researchCol">
-                              <h3>Next Step</h3>
-                              <p>Review the lead here, then run research or go straight to draft prep. Draft prep will look up the email first, then generate the outreach sequence. Apollo's free preview sometimes only exposes first names until enrichment runs.</p>
-                            </div>
-                            <div className="researchFooter">
-                              <div className="microMeta">
-                                <span>Contact email: {getEmailDisplay(record)}</span>
-                                <span>Company: {record.lead.companyName}</span>
-                                <span>Title: {record.lead.title}</span>
-                              </div>
-                              <div className="inlineActions">
-                                <button
-                                  className="secondaryButton"
-                                  type="button"
-                                  onClick={() => void researchLead(record)}
-                                  disabled={pitchPending || isPreparingDraft}
-                                >
-                                  <Sparkles size={16} />
-                                  {pitchPending ? "Researching..." : "Research Lead"}
-                                </button>
-                                <button
-                                  className="primaryButton"
-                                  type="button"
-                                  onClick={() => void approveDraft(record)}
-                                  disabled={isFindingEmail || isPreparingDraft}
-                                  title="Find email, run research, and move the lead into drafts."
-                                >
-                                  <Mail size={16} />
-                                  {isPreparingDraft
-                                    ? "Preparing Draft..."
-                                    : isFindingEmail
-                                      ? "Finding Email..."
-                                      : "Find Email, Research & Draft"}
-                                </button>
-                              </div>
-                            </div>
-                          </>
-                        )}
                       </div>
                     ) : null}
                   </div>
-                );
-              })}
-            </div>
+                  <button
+                    className="secondaryButton"
+                    type="button"
+                    onClick={exportLeadsCSV}
+                  >
+                    <Download size={15} />
+                    Export CSV
+                  </button>
+                </div>
+
+                <div className="tableHeader">
+                  <span>Name</span>
+                  <span>Email</span>
+                  <span>Position</span>
+                  <span>Priority</span>
+                  <span>Status</span>
+                  <span>Actions</span>
+                </div>
+
+                {leads.map((record) => {
+                  const research = researchByLeadId[record.lead.id];
+                  const isExpanded = expandedLeadId === record.lead.id;
+                  const contactStatus = leadStatusById[record.lead.id] || "new";
+                  const isResearched = research?.status === "researched";
+                  const canDraft = Boolean(record.lead.email);
+                  const isFindingEmail = emailLookupLeadId === record.lead.id;
+                  const isPreparingDraft = draftPrepLeadId === record.lead.id;
+
+                  return (
+                    <div key={record.lead.id} className="tableRowGroup">
+                      <div className="tableRow">
+                        <div className="cell primaryCell">
+                          <div className="nameBlock">
+                            <strong>{record.lead.name}</strong>
+                            <span>{record.lead.companyName}</span>
+                            {isResearched && research?.researchedAt && (
+                              <span className="researchedBadge" title={`Researched on ${new Date(research.researchedAt).toLocaleString()}`}>
+                                ✓ Researched {new Date(research.researchedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="cell mono">
+                          {getEmailDisplay(record)}
+                          {record.lead.email && emailSourceByLeadId[record.lead.id] ? (
+                            <span className={`sourceBadge sourceBadge--${emailSourceByLeadId[record.lead.id]}`}>
+                              {emailSourceByLeadId[record.lead.id] === "apollo"
+                                ? "via Apollo"
+                                : emailSourceByLeadId[record.lead.id] === "tomba"
+                                  ? "via Tomba"
+                                  : "existing"}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="cell">{record.lead.title}</div>
+                        <div className="cell">
+                          <span className="confidencePill">
+                            {record.company.deliveryZone !== "Other" ? "Zone Match" : "General Fit"}
+                          </span>
+                        </div>
+                        <div className="cell">
+                          <select
+                            className={`statusSelect statusSelect--${contactStatus}`}
+                            value={contactStatus}
+                            onChange={(e) => setLeadStatus(record.lead.id, e.target.value as LeadContactStatus)}
+                          >
+                            {Object.entries(CONTACT_STATUS_LABELS).map(([val, label]) => (
+                              <option key={val} value={val}>{label}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="cell actionCell">
+                          <button
+                            className={`iconButton${isResearched ? " iconButton--done" : ""}`}
+                            type="button"
+                            onClick={() => void researchLead(record, research?.talkingPoints)}
+                            title={isResearched ? "Re-research lead" : "Research lead"}
+                            disabled={pitchPending}
+                          >
+                            <Sparkles size={16} />
+                          </button>
+                          <button
+                            className="iconButton"
+                            type="button"
+                            onClick={() => void approveDraft(record)}
+                            title={
+                              canDraft
+                                ? isPreparingDraft
+                                  ? "Preparing draft"
+                                  : "Research and move to drafts"
+                                : isPreparingDraft || isFindingEmail
+                                  ? "Finding email and preparing draft"
+                                  : "Find email, research, and move to drafts"
+                            }
+                            disabled={isPreparingDraft || isFindingEmail}
+                          >
+                            <Mail size={16} />
+                          </button>
+                          <button
+                            className="iconButton"
+                            type="button"
+                            onClick={() => setExpandedLeadId(isExpanded ? null : record.lead.id)}
+                            title={isExpanded ? "Hide lead details" : "Review lead details"}
+                          >
+                            {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                          </button>
+                        </div>
+                      </div>
+
+                      {isExpanded ? (
+                        <div className="researchPanel">
+                          {research ? (
+                            <>
+                              <div className="researchCol">
+                                <h3>Summary</h3>
+                                <p>{research.pitch.summary}</p>
+                              </div>
+                              <div className="researchCol">
+                                <h3>Talking Points</h3>
+                                <textarea
+                                  value={research.talkingPoints}
+                                  onChange={(event) => updateTalkingPoints(record.lead.id, event.target.value)}
+                                />
+                              </div>
+                              <div className="researchCol">
+                                <h3>Pain Points</h3>
+                                <ul className="plainList">
+                                  {research.pitch.painPoints.map((item) => (
+                                    <li key={item}>{item}</li>
+                                  ))}
+                                </ul>
+                                {(research.followUp1 || research.followUp2) ? (
+                                  <div className="sequenceReadyBadge">
+                                    3-email sequence ready
+                                  </div>
+                                ) : (
+                                  <div className="sequenceLoadingBadge">
+                                    Generating sequence...
+                                  </div>
+                                )}
+                              </div>
+                              <div className="researchFooter">
+                                <div className="microMeta">
+                                  <span>Bridge insight: {research.pitch.bridgeInsight}</span>
+                                  <span>Specificity anchors: {research.pitch.variableEvidence.join(", ") || "None detected"}</span>
+                                  <span>Contact email: {getEmailDisplay(record)}</span>
+                                </div>
+                                <div className="inlineActions">
+                                  <button className="secondaryButton" type="button" onClick={() => void rebuildDraftFromTalkingPoints(record)}>
+                                    <RefreshCw size={16} />
+                                    Regenerate
+                                  </button>
+                                  <button
+                                    className="primaryButton"
+                                    type="button"
+                                    onClick={() => void approveDraft(record)}
+                                    disabled={isFindingEmail || isPreparingDraft}
+                                    title={
+                                      canDraft
+                                        ? "Research is done. Move this lead into drafts."
+                                        : "Find email, then move this researched lead into drafts."
+                                    }
+                                  >
+                                    <CircleCheck size={16} />
+                                    {isPreparingDraft
+                                      ? "Preparing Draft..."
+                                      : isFindingEmail
+                                        ? "Finding Email..."
+                                        : canDraft
+                                          ? "Move to Drafts"
+                                          : "Find Email & Move to Drafts"}
+                                  </button>
+                                </div>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="researchCol">
+                                <h3>Profile</h3>
+                                <p>{record.lead.name} is {record.lead.title} at {record.lead.companyName}.</p>
+                              </div>
+                              <div className="researchCol">
+                                <h3>Contact Details</h3>
+                                <ul className="plainList">
+                                  <li>Email: {getEmailDisplay(record)}</li>
+                                  <li>LinkedIn: {record.lead.linkedinUrl || "Not available yet"}</li>
+                                  <li>Domain: {record.lead.companyDomain || "Not available yet"}</li>
+                                </ul>
+                              </div>
+                              <div className="researchCol">
+                                <h3>Next Step</h3>
+                                <p>Review the lead here, then run research or go straight to draft prep. Draft prep will look up the email first, then generate the outreach sequence.</p>
+                              </div>
+                              <div className="researchFooter">
+                                <div className="microMeta">
+                                  <span>Contact email: {getEmailDisplay(record)}</span>
+                                  <span>Company: {record.lead.companyName}</span>
+                                  <span>Title: {record.lead.title}</span>
+                                </div>
+                                <div className="inlineActions">
+                                  <button
+                                    className="secondaryButton"
+                                    type="button"
+                                    onClick={() => void researchLead(record)}
+                                    disabled={pitchPending || isPreparingDraft}
+                                  >
+                                    <Sparkles size={16} />
+                                    {pitchPending ? "Researching..." : "Research Lead"}
+                                  </button>
+                                  <button
+                                    className="primaryButton"
+                                    type="button"
+                                    onClick={() => void approveDraft(record)}
+                                    disabled={isFindingEmail || isPreparingDraft}
+                                    title="Find email, run research, and move the lead into drafts."
+                                  >
+                                    <Mail size={16} />
+                                    {isPreparingDraft
+                                      ? "Preparing Draft..."
+                                      : isFindingEmail
+                                        ? "Finding Email..."
+                                        : "Find Email, Research & Draft"}
+                                  </button>
+                                </div>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
           )}
         </section>
       </>
@@ -1642,8 +1808,10 @@ export function OutreachDashboard() {
             const Icon = item.icon;
             const isActive = item.id === activePage;
             const badge =
-              item.id === "search" && leads.length > 0
-                ? leads.length
+              item.id === "search" && (selectedCompany ? leads.length > 0 : companies.length > 0)
+                ? selectedCompany
+                  ? leads.length
+                  : companies.length
                 : item.id === "drafts" && drafts.length > 0
                   ? drafts.length
                   : null;

@@ -3,6 +3,7 @@ import type { LeadRecord, SearchFilters } from "@/lib/types";
 import { apolloFetch } from "./client";
 import {
   parseSearchQuery,
+  getCompanyKeywordFallback,
   getDistinctiveCompanyTokens,
   tokenizeCompanyName
 } from "./query-parser";
@@ -16,9 +17,15 @@ import {
 const BROAD_FALLBACK_TITLES = [
   "Office Manager",
   "Senior Office Manager",
+  "Office Administrator",
+  "Administrative Director",
+  "Director of Administration",
   "Facilities Director",
   "Director of Facilities",
+  "Operations Manager",
+  "Director of Operations",
   "Workplace Services Director",
+  "Workplace Operations Manager",
   "Director of Workplace Experience",
   "Workplace Experience Manager",
   "Head of Workplace Experience",
@@ -26,6 +33,8 @@ const BROAD_FALLBACK_TITLES = [
   "Head of HR",
   "People Operations Director",
   "Director of Human Resources",
+  "Practice Manager",
+  "Legal Operations Manager",
   "Clinic Manager",
   "Director of Environmental Services"
 ];
@@ -104,13 +113,19 @@ export async function searchLeads(filters: SearchFilters): Promise<LeadRecord[]>
   const companyQueryTokens = parsed.looksLikeCompanyName
     ? getDistinctiveCompanyTokens(parsed.rawQuery)
     : [];
+  const companyKeywordFallback = parsed.looksLikeCompanyName
+    ? getCompanyKeywordFallback(parsed.rawQuery)
+    : null;
 
   const baseParams: Record<string, unknown> = {
     page: 1,
     per_page: Math.max(filters.limit, 10),
-    person_titles: personTitles,
     // Apollo broadens "Office Manager" → "Senior Office Manager", "Office Services Manager", etc.
     include_similar_titles: true
+  };
+  const targetedBaseParams: Record<string, unknown> = {
+    ...baseParams,
+    person_titles: personTitles
   };
 
   // Build attempts from most specific → most lenient. Each attempt is a
@@ -120,7 +135,7 @@ export async function searchLeads(filters: SearchFilters): Promise<LeadRecord[]>
   if (parsed.looksLikeCompanyName) {
     attempts.push({
       label: "company-name",
-      params: { ...baseParams, organization_names: [parsed.rawQuery] }
+      params: { ...targetedBaseParams, organization_names: [parsed.rawQuery] }
     });
   }
 
@@ -128,7 +143,7 @@ export async function searchLeads(filters: SearchFilters): Promise<LeadRecord[]>
     attempts.push({
       label: "location+keyword+employees",
       params: {
-        ...baseParams,
+        ...targetedBaseParams,
         organization_locations: parsed.locations,
         q_keywords: parsed.keywordPhrase,
         organization_num_employees_ranges: employeeRange,
@@ -141,7 +156,7 @@ export async function searchLeads(filters: SearchFilters): Promise<LeadRecord[]>
     attempts.push({
       label: "location+employees",
       params: {
-        ...baseParams,
+        ...targetedBaseParams,
         organization_locations: parsed.locations,
         organization_num_employees_ranges: employeeRange
       }
@@ -152,10 +167,22 @@ export async function searchLeads(filters: SearchFilters): Promise<LeadRecord[]>
     attempts.push({
       label: "keyword+employees",
       params: {
-        ...baseParams,
+        ...targetedBaseParams,
         q_keywords: parsed.keywordPhrase,
         organization_num_employees_ranges: employeeRange,
         ...(parsed.organizationIndustries.length > 0 ? { organization_industries: parsed.organizationIndustries } : {})
+      }
+    });
+  }
+
+  if (companyKeywordFallback) {
+    attempts.push({
+      label: "company-keyword+employees",
+      params: {
+        ...targetedBaseParams,
+        q_keywords: companyKeywordFallback,
+        organization_num_employees_ranges: employeeRange,
+        ...(parsed.industryHints.length > 0 ? { organization_industries: parsed.industryHints } : {})
       }
     });
   }
@@ -164,7 +191,7 @@ export async function searchLeads(filters: SearchFilters): Promise<LeadRecord[]>
     attempts.push({
       label: "raw-query+employees",
       params: {
-        ...baseParams,
+        ...targetedBaseParams,
         q_keywords: parsed.rawQuery,
         organization_num_employees_ranges: employeeRange
       }
@@ -176,7 +203,7 @@ export async function searchLeads(filters: SearchFilters): Promise<LeadRecord[]>
     attempts.push({
       label: "location+keyword (no employee filter)",
       params: {
-        ...baseParams,
+        ...targetedBaseParams,
         organization_locations: parsed.locations,
         q_keywords: parsed.keywordPhrase
       }
@@ -187,7 +214,7 @@ export async function searchLeads(filters: SearchFilters): Promise<LeadRecord[]>
     attempts.push({
       label: "location only (no employee filter)",
       params: {
-        ...baseParams,
+        ...targetedBaseParams,
         organization_locations: parsed.locations
       }
     });
@@ -195,12 +222,23 @@ export async function searchLeads(filters: SearchFilters): Promise<LeadRecord[]>
 
   attempts.push({
     label: "raw-query (no employee filter)",
-    params: { ...baseParams, q_keywords: parsed.rawQuery }
+    params: { ...targetedBaseParams, q_keywords: parsed.rawQuery }
   });
+
+  if (companyKeywordFallback) {
+    attempts.push({
+      label: "company-keyword (no employee filter)",
+      params: {
+        ...targetedBaseParams,
+        q_keywords: companyKeywordFallback,
+        ...(parsed.industryHints.length > 0 ? { organization_industries: parsed.industryHints } : {})
+      }
+    });
+  }
 
   attempts.push({
     label: "titles only",
-    params: baseParams
+    params: targetedBaseParams
   });
 
   const seenIds = new Set<string>();
@@ -208,14 +246,17 @@ export async function searchLeads(filters: SearchFilters): Promise<LeadRecord[]>
   const desiredPoolSize = parsed.looksLikeCompanyName
     ? Math.max(filters.limit * 3, 25)
     : filters.limit;
+  let successfulAttemptCount = 0;
+  let lastApolloError: Error | null = null;
 
-  for (const attempt of attempts) {
+  async function executeAttempt(attempt: { label: string; params: Record<string, unknown> }) {
     try {
       const peopleResponse = await apolloFetch<ApolloPeopleSearchResponse>(
         "/v1/mixed_people/api_search",
         attempt.params
       );
       const batch = peopleResponse.people || peopleResponse.contacts || [];
+      successfulAttemptCount += 1;
       console.log(`[Apollo search] ${attempt.label}: ${batch.length} results`);
 
       for (const person of batch) {
@@ -227,27 +268,143 @@ export async function searchLeads(filters: SearchFilters): Promise<LeadRecord[]>
         if (allResults.length >= desiredPoolSize) break;
       }
 
-      if (parsed.looksLikeCompanyName) {
-        const relevantCount = allResults.filter((person) =>
-          matchesCompanyTokens(person, companyQueryTokens)
-        ).length;
-
-        if (relevantCount >= filters.limit || allResults.length >= desiredPoolSize) {
-          break;
-        }
-      } else if (allResults.length >= filters.limit) {
-        break;
-      }
+      return batch;
     } catch (err) {
-      console.warn(
-        `[Apollo search] ${attempt.label} failed:`,
-        err instanceof Error ? err.message : err
-      );
+      lastApolloError =
+        err instanceof Error ? err : new Error(typeof err === "string" ? err : "Apollo search failed.");
+      console.warn(`[Apollo search] ${attempt.label} failed:`, lastApolloError.message);
+      return null;
     }
   }
 
-  const relevantResults = filterRelevantCompanyMatches(allResults, companyQueryTokens);
-  const hasAnyEmailCapableResult = relevantResults.some((person) => hasEmailHint(person));
+  for (const attempt of attempts) {
+    const batch = await executeAttempt(attempt);
+    if (!batch) {
+      continue;
+    }
+
+    if (parsed.looksLikeCompanyName) {
+      const relevantCount = allResults.filter((person) =>
+        matchesCompanyTokens(person, companyQueryTokens)
+      ).length;
+
+      if (relevantCount >= filters.limit || allResults.length >= desiredPoolSize) {
+        break;
+      }
+    } else if (allResults.length >= filters.limit) {
+      break;
+    }
+  }
+
+  let relevantResults = filterRelevantCompanyMatches(allResults, companyQueryTokens);
+  let hasAnyEmailCapableResult = relevantResults.some((person) => hasEmailHint(person));
+
+  if (!parsed.looksLikeCompanyName && relevantResults.length === 0) {
+    const supplementalAttempts: Array<{ label: string; params: Record<string, unknown> }> = [];
+
+    if (parsed.locations.length > 0 && parsed.keywordPhrase) {
+      supplementalAttempts.push({
+        label: "location+keyword+broad-titles",
+        params: {
+          ...baseParams,
+          person_titles: broaderTitles,
+          organization_locations: parsed.locations,
+          q_keywords: parsed.keywordPhrase,
+          ...(parsed.organizationIndustries.length > 0
+            ? { organization_industries: parsed.organizationIndustries }
+            : {})
+        }
+      });
+    }
+
+    if (parsed.locations.length > 0 && parsed.organizationIndustries.length > 0) {
+      supplementalAttempts.push({
+        label: "location+industry+broad-titles",
+        params: {
+          ...baseParams,
+          person_titles: broaderTitles,
+          organization_locations: parsed.locations,
+          organization_industries: parsed.organizationIndustries
+        }
+      });
+      supplementalAttempts.push({
+        label: "location+industry (no title filter)",
+        params: {
+          ...baseParams,
+          organization_locations: parsed.locations,
+          organization_industries: parsed.organizationIndustries
+        }
+      });
+    }
+
+    if (parsed.organizationIndustries.length > 0) {
+      supplementalAttempts.push({
+        label: "industry+broad-titles",
+        params: {
+          ...baseParams,
+          person_titles: broaderTitles,
+          organization_industries: parsed.organizationIndustries
+        }
+      });
+      supplementalAttempts.push({
+        label: "industry (no title filter)",
+        params: {
+          ...baseParams,
+          organization_industries: parsed.organizationIndustries
+        }
+      });
+    }
+
+    if (parsed.locations.length > 0) {
+      supplementalAttempts.push({
+        label: "location+broad-titles",
+        params: {
+          ...baseParams,
+          person_titles: broaderTitles,
+          organization_locations: parsed.locations
+        }
+      });
+      supplementalAttempts.push({
+        label: "location (no title filter)",
+        params: {
+          ...baseParams,
+          organization_locations: parsed.locations
+        }
+      });
+    }
+
+    if (parsed.rawQuery) {
+      supplementalAttempts.push({
+        label: "raw-query+broad-titles",
+        params: {
+          ...baseParams,
+          person_titles: broaderTitles,
+          q_keywords: parsed.rawQuery
+        }
+      });
+      supplementalAttempts.push({
+        label: "raw-query (no title filter)",
+        params: {
+          ...baseParams,
+          q_keywords: parsed.rawQuery
+        }
+      });
+    }
+
+    for (const attempt of supplementalAttempts) {
+      const batch = await executeAttempt(attempt);
+      if (!batch) {
+        continue;
+      }
+
+      if (allResults.length >= filters.limit) {
+        break;
+      }
+    }
+
+    relevantResults = filterRelevantCompanyMatches(allResults, companyQueryTokens);
+    hasAnyEmailCapableResult = relevantResults.some((person) => hasEmailHint(person));
+  }
 
   if (parsed.looksLikeCompanyName && !hasAnyEmailCapableResult) {
     const supplementalAttempts: Array<{ label: string; params: Record<string, unknown> }> = [
@@ -266,32 +423,44 @@ export async function searchLeads(filters: SearchFilters): Promise<LeadRecord[]>
           person_titles: broaderTitles,
           q_keywords: parsed.rawQuery
         }
-      }
+      },
+      ...(companyKeywordFallback
+        ? [
+            {
+              label: "company-keyword+broad-titles",
+              params: {
+                ...baseParams,
+                person_titles: broaderTitles,
+                q_keywords: companyKeywordFallback,
+                ...(parsed.industryHints.length > 0 ? { organization_industries: parsed.industryHints } : {})
+              }
+            },
+            {
+              label: "company-keyword (no title filter)",
+              params: {
+                ...baseParams,
+                q_keywords: companyKeywordFallback,
+                ...(parsed.industryHints.length > 0 ? { organization_industries: parsed.industryHints } : {})
+              }
+            }
+          ]
+        : [])
     ];
 
     for (const attempt of supplementalAttempts) {
-      try {
-        const peopleResponse = await apolloFetch<ApolloPeopleSearchResponse>(
-          "/v1/mixed_people/api_search",
-          attempt.params
-        );
-        const batch = peopleResponse.people || peopleResponse.contacts || [];
-        console.log(`[Apollo search] ${attempt.label}: ${batch.length} results`);
+      const batch = await executeAttempt(attempt);
+      if (!batch) {
+        continue;
+      }
 
-        for (const person of batch) {
-          const id = typeof person.id === "string" ? person.id : null;
-          if (id && !seenIds.has(id)) {
-            seenIds.add(id);
-            allResults.push(person);
-          }
-        }
-      } catch (err) {
-        console.warn(
-          `[Apollo search] ${attempt.label} failed:`,
-          err instanceof Error ? err.message : err
-        );
+      if (filterRelevantCompanyMatches(allResults, companyQueryTokens).length >= filters.limit) {
+        break;
       }
     }
+  }
+
+  if (successfulAttemptCount === 0 && lastApolloError) {
+    throw lastApolloError;
   }
 
   console.log(

@@ -55,6 +55,12 @@ describe("parseSearchQuery", () => {
     );
   });
 
+  it("preserves useful category phrases for company search", () => {
+    const parsed = parseSearchQuery("law firm NYC", []);
+    expect(parsed.descriptivePhrase).toBe("law firm");
+    expect(parsed.keywords).toEqual(["law"]);
+  });
+
   it("returns healthcare industries for singular 'hospital' queries", () => {
     // Note: the industry regex is \bhospital\b, which doesn't match plural
     // "hospitals". The DEFAULT_SEARCH_FILTERS query "Hospitals in the Midwest"

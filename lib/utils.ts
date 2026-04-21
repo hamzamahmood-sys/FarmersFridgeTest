@@ -8,15 +8,15 @@ import type {
 } from "@/lib/types";
 
 export function estimateApolloCredits(limit: number): ApolloCreditEstimate {
-  // We use mixed_people/api_search (free) and extract firmographics from the
-  // search response directly, so searches no longer cost credits per lead.
+  // Company search now uses Apollo's organization search endpoint, then the
+  // selected company is expanded into contacts via the free people search.
   void limit;
   return {
     peopleSearchCalls: 1,
-    organizationEnrichCalls: 0,
-    totalEstimatedOperations: 1,
+    organizationEnrichCalls: 1,
+    totalEstimatedOperations: 2,
     note:
-      "Searches use Apollo's mixed_people/api_search endpoint (free) and reuse the embedded organization data, so the search step itself stays at one operation. Optional email lookup later can still consume Apollo enrichment credits depending on your plan."
+      "Search starts with Apollo's organization search to find matching companies, then loads contacts for the company you pick using the free mixed_people/api_search endpoint. Organization search may consume Apollo credits depending on your plan."
   };
 }
 
@@ -32,26 +32,30 @@ export function resolveDeliveryZone(company: Pick<CompanyFirmographics, "hqCity"
   return "Other";
 }
 
-export function priorityLead(record: LeadRecord): number {
+export function scoreCompanyFit(company: CompanyFirmographics): number {
   let score = 0;
 
-  if (record.company.deliveryZone !== "Other") {
+  if (company.deliveryZone !== "Other") {
     score += 100;
   }
 
-  if (record.company.employeeCount && record.company.employeeCount >= 1000) {
+  if (company.employeeCount && company.employeeCount >= 1000) {
     score += 30;
-  } else if (record.company.employeeCount && record.company.employeeCount >= 500) {
+  } else if (company.employeeCount && company.employeeCount >= 500) {
     score += 20;
-  } else if (record.company.employeeCount && record.company.employeeCount >= 200) {
+  } else if (company.employeeCount && company.employeeCount >= 200) {
     score += 10;
   }
 
-  if (record.company.keywords.some((keyword) => ["wellness", "sustainability", "employee benefits"].includes(keyword.toLowerCase()))) {
+  if (company.keywords.some((keyword) => ["wellness", "sustainability", "employee benefits"].includes(keyword.toLowerCase()))) {
     score += 20;
   }
 
   return score;
+}
+
+export function priorityLead(record: LeadRecord): number {
+  return scoreCompanyFit(record.company);
 }
 
 export function sortLeadRecords(records: LeadRecord[]): LeadRecord[] {

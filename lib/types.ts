@@ -40,6 +40,15 @@ export interface LeadRecord {
   priorityScore: number;
 }
 
+export interface ProspectCompany {
+  id: string;
+  name: string;
+  domain?: string;
+  linkedinUrl?: string;
+  company: CompanyFirmographics;
+  priorityScore: number;
+}
+
 export interface ApolloCreditEstimate {
   peopleSearchCalls: number;
   organizationEnrichCalls: number;

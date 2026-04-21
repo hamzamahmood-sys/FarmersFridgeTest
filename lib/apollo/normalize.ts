@@ -46,6 +46,48 @@ function normalizeTechStack(org: Record<string, unknown>): string[] {
     .slice(0, 8);
 }
 
+function extractCompanyFirmographics(
+  source: Record<string, unknown>,
+  fallback?: Partial<CompanyFirmographics>
+): CompanyFirmographics {
+  const company: CompanyFirmographics = {
+    industry:
+      typeof source.industry === "string"
+        ? source.industry
+        : fallback?.industry,
+    employeeCount:
+      typeof source.estimated_num_employees === "number"
+        ? source.estimated_num_employees
+        : typeof source.employee_count === "number"
+          ? source.employee_count
+          : fallback?.employeeCount,
+    hqCity:
+      typeof source.city === "string"
+        ? source.city
+        : fallback?.hqCity,
+    hqState:
+      typeof source.state === "string"
+        ? source.state
+        : fallback?.hqState,
+    hqCountry:
+      typeof source.country === "string"
+        ? source.country
+        : fallback?.hqCountry,
+    keywords: normalizeKeywords(source),
+    techStack: normalizeTechStack(source),
+    about:
+      typeof source.short_description === "string"
+        ? source.short_description
+        : typeof source.description === "string"
+          ? source.description
+          : fallback?.about,
+    deliveryZone: "Other"
+  };
+
+  company.deliveryZone = resolveDeliveryZone(company);
+  return company;
+}
+
 export function normalizeDomain(value?: string): string | undefined {
   if (!value) return undefined;
 
@@ -85,46 +127,28 @@ export function isRealApolloEmail(value: unknown): value is string {
  */
 export function extractCompanyFromPerson(person: Record<string, unknown>): CompanyFirmographics {
   const org = (person.organization as Record<string, unknown> | undefined) || {};
-
-  const company: CompanyFirmographics = {
-    industry: typeof org.industry === "string" ? org.industry : undefined,
+  return extractCompanyFirmographics(org, {
     employeeCount:
-      typeof org.estimated_num_employees === "number"
-        ? org.estimated_num_employees
-        : typeof org.employee_count === "number"
-          ? org.employee_count
-          : typeof person.organization_num_employees === "number"
-            ? (person.organization_num_employees as number)
-            : undefined,
+      typeof person.organization_num_employees === "number"
+        ? (person.organization_num_employees as number)
+        : undefined,
     hqCity:
-      typeof org.city === "string"
-        ? org.city
-        : typeof person.organization_city === "string"
-          ? (person.organization_city as string)
-          : undefined,
+      typeof person.organization_city === "string"
+        ? (person.organization_city as string)
+        : undefined,
     hqState:
-      typeof org.state === "string"
-        ? org.state
-        : typeof person.organization_state === "string"
-          ? (person.organization_state as string)
-          : undefined,
+      typeof person.organization_state === "string"
+        ? (person.organization_state as string)
+        : undefined,
     hqCountry:
-      typeof org.country === "string"
-        ? org.country
-        : typeof person.organization_country === "string"
-          ? (person.organization_country as string)
-          : undefined,
-    keywords: normalizeKeywords(org),
-    techStack: normalizeTechStack(org),
-    about:
-      typeof org.short_description === "string"
-        ? org.short_description
-        : typeof org.description === "string"
-          ? org.description
-          : undefined,
-    deliveryZone: "Other"
-  };
+      typeof person.organization_country === "string"
+        ? (person.organization_country as string)
+        : undefined
+  });
+}
 
-  company.deliveryZone = resolveDeliveryZone(company);
-  return company;
+export function extractCompanyFromOrganization(
+  organization: Record<string, unknown>
+): CompanyFirmographics {
+  return extractCompanyFirmographics(organization);
 }

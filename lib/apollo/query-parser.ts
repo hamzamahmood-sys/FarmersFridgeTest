@@ -44,6 +44,11 @@ const SEARCH_STOPWORDS = new Set([
   "business", "businesses", "orgs", "organizations", "org"
 ]);
 
+const PHRASE_STOPWORDS = new Set([
+  "in", "at", "the", "of", "and", "or", "for", "with", "to", "a", "an",
+  "area", "region", "market", "markets"
+]);
+
 // Generic words that are common in exact-company searches but not distinctive
 // enough to tell Apollo's broad keyword matches apart.
 const COMPANY_QUERY_GENERIC_TOKENS = new Set([
@@ -179,8 +184,10 @@ export interface ParsedQuery {
   locations: string[];
   keywords: string[];
   keywordPhrase: string;
+  descriptivePhrase: string;
   rawQuery: string;
   looksLikeCompanyName: boolean;
+  industryHints: string[];
   organizationIndustries: string[];
 }
 
@@ -242,6 +249,10 @@ export function parseSearchQuery(query: string, stateHints: string[]): ParsedQue
     .split(/\s+/)
     .map((t) => t.replace(/[^\w&]/g, "").trim())
     .filter((t) => t.length >= 2 && !SEARCH_STOPWORDS.has(t.toLowerCase()));
+  const descriptiveTokens = remaining
+    .split(/\s+/)
+    .map((t) => t.replace(/[^\w&]/g, "").trim())
+    .filter((t) => t.length >= 2 && !PHRASE_STOPWORDS.has(t.toLowerCase()));
 
   // Loose heuristic: "Northwestern Medicine", "Rush Hospital", "University of
   // Chicago", etc. Company-of-location phrases always qualify; otherwise we
@@ -251,14 +262,17 @@ export function parseSearchQuery(query: string, stateHints: string[]): ParsedQue
     isCompanyOfLocation ||
     (locationsFromQuery.size === 0 && looksLikeExactCompanyQuery(cleaned));
 
-  const organizationIndustries = looksLikeCompanyName ? [] : detectIndustries(cleaned);
+  const industryHints = detectIndustries(cleaned);
+  const organizationIndustries = looksLikeCompanyName ? [] : industryHints;
 
   return {
     locations: [...locations],
     keywords,
     keywordPhrase: keywords.join(" "),
+    descriptivePhrase: descriptiveTokens.join(" "),
     rawQuery: cleaned,
     looksLikeCompanyName,
+    industryHints,
     organizationIndustries
   };
 }
@@ -275,6 +289,21 @@ export function getDistinctiveCompanyTokens(query: string): string[] {
   return tokenizeSearchText(query).filter(
     (token) => !SEARCH_STOPWORDS.has(token) && !COMPANY_QUERY_GENERIC_TOKENS.has(token)
   );
+}
+
+export function getCompanyKeywordFallback(query: string): string | null {
+  const cleaned = query.trim();
+  if (!cleaned || COMPANY_OF_LOCATION_PATTERN.test(cleaned)) return null;
+
+  const tokens = getDistinctiveCompanyTokens(cleaned);
+  if (tokens.length === 0) return null;
+
+  const fallback = tokens.join(" ");
+  if (!fallback || fallback.toLowerCase() === cleaned.toLowerCase()) {
+    return null;
+  }
+
+  return fallback;
 }
 
 export function tokenizeCompanyName(value: string): string {
