@@ -2,6 +2,7 @@ import { personaToApolloTitles, resolveContactDepartment, scoreCompanyFit, sortL
 import type { LeadRecord, ProspectCompany, SearchFilters } from "@/lib/types";
 import { apolloFetch } from "./client";
 import { enrichLeadContactFromApollo } from "./enrich";
+import { findEmailTomba, isTombaConfigured } from "@/lib/tomba";
 import {
   getCompactCompanyNameVariant,
   getCompanyKeywordFallback,
@@ -229,6 +230,57 @@ function sortPeopleForOutreach(
 
     return getOrganizationName(a).localeCompare(getOrganizationName(b));
   });
+}
+
+function splitFullName(name: string): { firstName: string; lastName: string } {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return { firstName: "", lastName: "" };
+  if (parts.length === 1) return { firstName: parts[0] || "", lastName: "" };
+
+  return {
+    firstName: parts[0] || "",
+    lastName: parts.slice(1).join(" ")
+  };
+}
+
+async function enrichTopContact(record: LeadRecord): Promise<LeadRecord> {
+  const apolloResult = await enrichLeadContactFromApollo(record);
+  let enrichedRecord = apolloResult.leadRecord;
+
+  if (isRealApolloEmail(enrichedRecord.lead.email)) {
+    return {
+      ...enrichedRecord,
+      lead: {
+        ...enrichedRecord.lead,
+        emailSource: "apollo"
+      }
+    };
+  }
+
+  if (!isTombaConfigured() || !enrichedRecord.lead.companyDomain) {
+    return enrichedRecord;
+  }
+
+  const { firstName, lastName } = splitFullName(enrichedRecord.lead.name);
+  if (!firstName) return enrichedRecord;
+
+  const tombaEmail = await findEmailTomba(firstName, lastName, enrichedRecord.lead.companyDomain, {
+    companyName: enrichedRecord.lead.companyName,
+    fullName: enrichedRecord.lead.name
+  });
+
+  if (!tombaEmail) {
+    return enrichedRecord;
+  }
+
+  return {
+    ...enrichedRecord,
+    lead: {
+      ...enrichedRecord.lead,
+      email: tombaEmail,
+      emailSource: "tomba"
+    }
+  };
 }
 
 function toProspectCompany(
@@ -581,7 +633,7 @@ export async function searchLeadsForCompany(
   const enrichedResults = await Promise.allSettled(
     sortedLeads
       .slice(0, enrichmentCount)
-      .map(async (record) => (await enrichLeadContactFromApollo(record)).leadRecord)
+      .map((record) => enrichTopContact(record))
   );
 
   return sortLeadRecords(
@@ -599,7 +651,9 @@ export async function searchLeadsForCompany(
         lead: {
           ...record.lead,
           ...result.value.lead,
-          emailSource: isRealApolloEmail(result.value.lead.email) ? "apollo" : record.lead.emailSource,
+          emailSource:
+            result.value.lead.emailSource
+            || (isRealApolloEmail(result.value.lead.email) ? "apollo" : record.lead.emailSource),
           source: record.lead.source
         },
         company: {

@@ -1,13 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { searchCompanies, searchLeadsForCompany } from "@/lib/apollo/company-search";
 import { apolloFetch } from "@/lib/apollo/client";
+import { findEmailTomba, isTombaConfigured } from "@/lib/tomba";
 import type { ProspectCompany, SearchFilters } from "@/lib/types";
 
 vi.mock("@/lib/apollo/client", () => ({
   apolloFetch: vi.fn()
 }));
 
+vi.mock("@/lib/tomba", () => ({
+  findEmailTomba: vi.fn(),
+  isTombaConfigured: vi.fn()
+}));
+
 const mockApolloFetch = vi.mocked(apolloFetch);
+const mockFindEmailTomba = vi.mocked(findEmailTomba);
+const mockIsTombaConfigured = vi.mocked(isTombaConfigured);
 
 const marketFilters: SearchFilters = {
   personas: ["office_manager"],
@@ -54,6 +62,8 @@ const selectedCompany: ProspectCompany = {
 describe("company-first Apollo search", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsTombaConfigured.mockReturnValue(false);
+    mockFindEmailTomba.mockResolvedValue(null);
   });
 
   it("finds matching companies for market queries before loading people", async () => {
@@ -215,6 +225,69 @@ describe("company-first Apollo search", () => {
     expect(leads[0]?.lead.name).toBe("Joe Benti");
     expect(leads[0]?.lead.email).toBe("joe@hudsonlegal.com");
     expect(leads[0]?.lead.emailSource).toBe("apollo");
+  });
+
+  it("falls back to Tomba when Apollo match reveals the full name but not the email", async () => {
+    mockIsTombaConfigured.mockReturnValue(true);
+    mockFindEmailTomba.mockResolvedValue("laura@hudsonlegal.com");
+
+    mockApolloFetch.mockImplementation(async (path, body) => {
+      const params = body as Record<string, unknown>;
+
+      if (path === "/v1/mixed_people/api_search") {
+        return {
+          people: [
+            {
+              id: "person-3",
+              first_name: "Laura",
+              title: "Office Manager",
+              has_email: true,
+              organization_id: "org-1",
+              organization_name: "Hudson Legal Group",
+              organization: {
+                name: "Hudson Legal Group",
+                primary_domain: "hudsonlegal.com",
+                industry: "Law Practice",
+                estimated_num_employees: 450,
+                city: "New York",
+                state: "New York",
+                country: "United States",
+                keywords: ["law"]
+              }
+            }
+          ]
+        };
+      }
+
+      if (path === "/v1/people/match" && params.id === "person-3") {
+        return {
+          person: {
+            id: "person-3",
+            first_name: "Laura",
+            last_name: "Dietz",
+            name: "Laura Dietz",
+            title: "Office Manager",
+            organization_id: "org-1",
+            organization: {
+              website_url: "https://hudsonlegal.com"
+            }
+          }
+        };
+      }
+
+      return { people: [] };
+    });
+
+    const leads = await searchLeadsForCompany(marketFilters, selectedCompany);
+
+    expect(leads).toHaveLength(1);
+    expect(leads[0]?.lead.name).toBe("Laura Dietz");
+    expect(leads[0]?.lead.email).toBe("laura@hudsonlegal.com");
+    expect(leads[0]?.lead.emailSource).toBe("tomba");
+    expect(mockFindEmailTomba).toHaveBeenCalledWith("Laura", "Dietz", "hudsonlegal.com", {
+      companyName: "Hudson Legal Group",
+      fullName: "Laura Dietz"
+    });
   });
 
   it("tries a compact company-name variant for exact company searches", async () => {

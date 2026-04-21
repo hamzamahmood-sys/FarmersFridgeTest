@@ -167,6 +167,59 @@ export function LocationDetail({
     currentLocation.industry
   ]);
 
+  function normalizeTextValue(value: unknown): string {
+    if (typeof value === "string") return value;
+    if (Array.isArray(value)) {
+      return value
+        .map((entry) => normalizeTextValue(entry))
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    if (value && typeof value === "object") {
+      return Object.entries(value as Record<string, unknown>)
+        .map(([key, entry]) => {
+          const rendered = normalizeTextValue(entry);
+          if (!rendered) return "";
+          const label = key
+            .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+            .replace(/[_-]+/g, " ")
+            .trim();
+          const heading = label ? label.charAt(0).toUpperCase() + label.slice(1) : key;
+          return `${heading}: ${rendered}`;
+        })
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    if (typeof value === "number" || typeof value === "boolean") {
+      return String(value);
+    }
+
+    return "";
+  }
+
+  function normalizePitch(pitch: GeneratedPitch): GeneratedPitch {
+    const painPoints = Array.isArray(pitch.painPoints)
+      ? pitch.painPoints
+        .map((entry) => normalizeTextValue(entry))
+        .filter(Boolean)
+      : normalizeTextValue(pitch.painPoints)
+        .split(/\n+/)
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+
+    return {
+      ...pitch,
+      subject: normalizeTextValue(pitch.subject),
+      body: normalizeTextValue(pitch.body),
+      talkingPoints: normalizeTextValue(pitch.talkingPoints),
+      bridgeInsight: normalizeTextValue(pitch.bridgeInsight),
+      summary: normalizeTextValue(pitch.summary),
+      painPoints
+    };
+  }
+
   function replaceLeadRecord(nextRecord: LeadRecord) {
     setResolvedLeadById((current) => ({
       ...current,
@@ -324,15 +377,24 @@ export function LocationDetail({
     step: 1 | 2 | 3 = 1,
     forceRefresh = false
   ): Promise<GeneratedPitch> {
+    const normalizedTalkingPointsOverride = talkingPointsOverride
+      ? normalizeTextValue(talkingPointsOverride)
+      : undefined;
+
     const response = await fetch("/api/pitch", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ leadRecord: record, talkingPointsOverride, step, forceRefresh })
+      body: JSON.stringify({
+        leadRecord: record,
+        talkingPointsOverride: normalizedTalkingPointsOverride,
+        step,
+        forceRefresh
+      })
     });
 
     const data = (await response.json()) as { pitch?: GeneratedPitch; error?: string };
     if (!response.ok || !data.pitch) throw new Error(data.error || "Pitch generation failed.");
-    return data.pitch;
+    return normalizePitch(data.pitch);
   }
 
   async function fetchFollowUpWithRetry(record: LeadRecord, talkingPoints: string, step: 2 | 3): Promise<GeneratedPitch> {
@@ -349,9 +411,11 @@ export function LocationDetail({
   }
 
   async function generateFollowUps(record: LeadRecord, talkingPoints: string): Promise<{ followUp1: FollowUpDraft; followUp2: FollowUpDraft } | null> {
+    const normalizedTalkingPoints = normalizeTextValue(talkingPoints);
+
     try {
-      const fu1 = await fetchFollowUpWithRetry(record, talkingPoints, 2);
-      const fu2 = await fetchFollowUpWithRetry(record, talkingPoints, 3);
+      const fu1 = await fetchFollowUpWithRetry(record, normalizedTalkingPoints, 2);
+      const fu2 = await fetchFollowUpWithRetry(record, normalizedTalkingPoints, 3);
       const next = {
         followUp1: { subject: fu1.subject, body: fu1.body },
         followUp2: { subject: fu2.subject, body: fu2.body }
@@ -459,13 +523,14 @@ export function LocationDetail({
 
     for (const record of unresearched) {
       try {
+        const resolvedRecord = getResolvedRecord(record);
         const existingResearch = researchByLeadId[record.lead.id];
         const forceRefresh = Boolean(existingResearch && isLowSignalPitch(existingResearch.pitch));
-        const pitch = await fetchPitch(record, undefined, 1, forceRefresh);
+        const pitch = await fetchPitch(resolvedRecord, undefined, 1, forceRefresh);
 
         setResearchByLeadId((current) => ({
           ...current,
-          [record.lead.id]: {
+          [resolvedRecord.lead.id]: {
             status: "researched",
             pitch,
             talkingPoints: pitch.talkingPoints,
@@ -476,7 +541,7 @@ export function LocationDetail({
             researchedAt: new Date().toISOString()
           }
         }));
-        void generateFollowUps(record, pitch.talkingPoints);
+        void generateFollowUps(resolvedRecord, pitch.talkingPoints);
       } catch {
         failedCount += 1;
       }

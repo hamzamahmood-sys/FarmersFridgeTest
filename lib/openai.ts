@@ -24,6 +24,93 @@ function normalizeGeneratedCopy(text: string): string {
     .trim();
 }
 
+function humanizeKey(key: string): string {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .replace(/^\w/, (char) => char.toUpperCase());
+}
+
+function flattenInlineValue(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => flattenInlineValue(item))
+      .filter(Boolean)
+      .join(", ");
+  }
+
+  if (value && typeof value === "object") {
+    const lines = Object.entries(value as Record<string, unknown>)
+      .map(([key, entry]) => {
+        const rendered = flattenInlineValue(entry);
+        return rendered ? `${humanizeKey(key)}: ${rendered}` : "";
+      })
+      .filter(Boolean);
+
+    return lines.join(", ");
+  }
+
+  return "";
+}
+
+export function coerceGeneratedTextValue(value: unknown, fallback = ""): string {
+  if (typeof value === "string") {
+    return normalizeGeneratedCopy(value || fallback);
+  }
+
+  if (Array.isArray(value)) {
+    const lines = value
+      .map((item) => flattenInlineValue(item))
+      .filter(Boolean);
+
+    if (lines.length > 0) {
+      return normalizeGeneratedCopy(lines.join("\n"));
+    }
+  }
+
+  if (value && typeof value === "object") {
+    const lines = Object.entries(value as Record<string, unknown>)
+      .map(([key, entry]) => {
+        const rendered = flattenInlineValue(entry);
+        return rendered ? `${humanizeKey(key)}: ${rendered}` : "";
+      })
+      .filter(Boolean);
+
+    if (lines.length > 0) {
+      return normalizeGeneratedCopy(lines.join("\n"));
+    }
+  }
+
+  return normalizeGeneratedCopy(fallback);
+}
+
+function coerceGeneratedListValue(value: unknown, fallback: string[]): string[] {
+  if (Array.isArray(value)) {
+    const entries = value
+      .map((item) => flattenInlineValue(item))
+      .filter(Boolean);
+
+    if (entries.length > 0) {
+      return entries.slice(0, 3);
+    }
+  }
+
+  const coerced = coerceGeneratedTextValue(value);
+  if (coerced) {
+    return coerced
+      .split(/\n+/)
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .slice(0, 3);
+  }
+
+  return fallback;
+}
+
 function getOpenAIError(error: unknown): Error {
   const status =
     typeof error === "object" && error && "status" in error && typeof error.status === "number"
@@ -267,8 +354,8 @@ async function generateFollowUpPitch(
     }
 
     return {
-      subject: normalizeGeneratedCopy(parsed.subject || `Follow-up: ${record.lead.companyName}`),
-      body: normalizeGeneratedCopy(parsed.body || ""),
+      subject: coerceGeneratedTextValue(parsed.subject, `Follow-up: ${record.lead.companyName}`),
+      body: coerceGeneratedTextValue(parsed.body, ""),
       talkingPoints: seedTalkingPoints,
       bridgeInsight: bridge,
       summary: "",
@@ -375,26 +462,25 @@ export async function generatePitch(
       return buildFallbackPitch(record, seedTalkingPoints);
     }
 
-    parsed.subject = normalizeGeneratedCopy(parsed.subject ?? "");
-    parsed.body = normalizeGeneratedCopy(parsed.body ?? "");
+    parsed.subject = coerceGeneratedTextValue(parsed.subject, "");
+    parsed.body = coerceGeneratedTextValue(parsed.body, "");
     const enforced = ensurePitchSpecificity(parsed.body, parsed.subject, record);
+    const fallbackPainPoints = [
+      "Employees need healthier meal access without expanding cafeteria operations.",
+      "Teams working long or irregular hours need food availability beyond lunch service.",
+      "Workplace leaders want amenities that support wellness goals and retention."
+    ];
 
     return {
       subject: enforced.subject,
       body: enforced.body,
-      talkingPoints: parsed.talkingPoints || seedTalkingPoints,
-      bridgeInsight: parsed.bridgeInsight || bridge,
-      summary:
-        parsed.summary ||
-        `${record.lead.name} appears to be a strong Farmer's Fridge contact at ${record.lead.companyName} based on their ${record.lead.title} role and the workplace amenity signals in Apollo.`,
-      painPoints:
-        Array.isArray(parsed.painPoints) && parsed.painPoints.length > 0
-          ? parsed.painPoints.slice(0, 3)
-          : [
-              "Employees need healthier meal access without expanding cafeteria operations.",
-              "Teams working long or irregular hours need food availability beyond lunch service.",
-              "Workplace leaders want amenities that support wellness goals and retention."
-            ],
+      talkingPoints: coerceGeneratedTextValue(parsed.talkingPoints, seedTalkingPoints),
+      bridgeInsight: coerceGeneratedTextValue(parsed.bridgeInsight, bridge),
+      summary: coerceGeneratedTextValue(
+        parsed.summary,
+        `${record.lead.name} appears to be a strong Farmer's Fridge contact at ${record.lead.companyName} based on their ${record.lead.title} role and the workplace amenity signals in Apollo.`
+      ),
+      painPoints: coerceGeneratedListValue(parsed.painPoints, fallbackPainPoints),
       variableEvidence: enforced.variableEvidence
     };
   } catch (error) {
