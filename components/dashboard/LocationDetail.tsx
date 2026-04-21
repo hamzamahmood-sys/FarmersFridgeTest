@@ -143,6 +143,28 @@ export function LocationDetail({
     [currentContacts, researchByLeadId]
   );
 
+  const aboutQuickFacts = useMemo(() => {
+    const headquarters = [currentLocation.hqCity, currentLocation.hqState, currentLocation.hqCountry]
+      .filter(Boolean)
+      .join(", ");
+
+    return [
+      currentLocation.industry ? `Industry: ${currentLocation.industry}` : null,
+      headquarters ? `HQ: ${headquarters}` : null,
+      currentLocation.employeeCount
+        ? `Employees: ${currentLocation.employeeCount.toLocaleString()}`
+        : null,
+      currentLocation.companyDomain ? `Domain: ${currentLocation.companyDomain}` : null
+    ].filter((value): value is string => Boolean(value));
+  }, [
+    currentLocation.companyDomain,
+    currentLocation.employeeCount,
+    currentLocation.hqCity,
+    currentLocation.hqCountry,
+    currentLocation.hqState,
+    currentLocation.industry
+  ]);
+
   function replaceLeadRecord(nextRecord: LeadRecord) {
     // No-op: contact enrichment (email lookup) updates the lead's email in place.
     // The contacts array lives in the parent's locationDetail, but for display purposes
@@ -658,6 +680,13 @@ export function LocationDetail({
       <section className="detailGrid">
         <article className="dashboardPanel">
           <h2>About</h2>
+          {aboutQuickFacts.length > 0 ? (
+            <div className="locationCounts locationCounts--detail">
+              {aboutQuickFacts.map((fact) => (
+                <span key={fact}>{fact}</span>
+              ))}
+            </div>
+          ) : null}
           <p>{currentLocation.about || "No background captured yet. Load contacts or update notes to build out the account brief."}</p>
           <div className="locationCounts locationCounts--detail">
             <span>{currentContacts.length} contacts loaded</span>

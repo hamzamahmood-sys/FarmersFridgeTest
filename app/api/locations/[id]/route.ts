@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { z, ZodError } from "zod";
 import { deleteSavedLocation, getLocationDetail, updateSavedLocation } from "@/lib/db";
 import { AuthRequired, resolveCurrentUserId } from "@/lib/auth-user";
+import { enrichSavedLocationCompanyProfile, hasUsableCompanyAbout } from "@/lib/company-profile";
 
 const updateSchema = z.object({
   about: z.string().optional(),
@@ -24,6 +25,21 @@ export async function GET(
 
     if (!detail) {
       return NextResponse.json({ error: "Location not found." }, { status: 404 });
+    }
+
+    if (!hasUsableCompanyAbout(detail.location.about)) {
+      const enrichedLocation = await enrichSavedLocationCompanyProfile(detail.location);
+
+      if (enrichedLocation.about && enrichedLocation.about !== detail.location.about) {
+        const persistedLocation = await updateSavedLocation(userId, context.params.id, {
+          about: enrichedLocation.about
+        });
+
+        return NextResponse.json({
+          ...detail,
+          location: persistedLocation || enrichedLocation
+        });
+      }
     }
 
     return NextResponse.json(detail);

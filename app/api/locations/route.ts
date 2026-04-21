@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { z, ZodError } from "zod";
 import { listSavedLocations, saveProspectCompanyAsLocation } from "@/lib/db";
 import { AuthRequired, resolveCurrentUserId } from "@/lib/auth-user";
+import { enrichProspectCompanyProfile } from "@/lib/company-profile";
 
 const locationTypeSchema = z.enum(["hospital", "corporate", "university", "gym", "airport", "other", "all"]);
 const pipelineStageSchema = z.enum(["prospect", "meeting", "won", "lost", "all"]);
@@ -79,7 +80,8 @@ export async function POST(request: Request) {
     const userId = await resolveCurrentUserId();
     const body = await request.json();
     const company = companySchema.parse(body.company ?? body);
-    const location = await saveProspectCompanyAsLocation(userId, company);
+    const enrichedCompany = await enrichProspectCompanyProfile(company);
+    const location = await saveProspectCompanyAsLocation(userId, enrichedCompany);
     return NextResponse.json({ location });
   } catch (error) {
     if (error instanceof AuthRequired) {
