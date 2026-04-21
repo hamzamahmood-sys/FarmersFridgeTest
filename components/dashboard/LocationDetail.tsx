@@ -49,6 +49,7 @@ type Props = {
   onBack: () => void;
   onLoadContacts: (options?: { limit?: number }) => Promise<void>;
   onLoadMore: () => Promise<void>;
+  onDiscoverWithAI: () => Promise<void>;
   onUpdateField: (field: "pipelineStage" | "locationType" | "pitchType", value: string) => Promise<void>;
   onSaveNotes: (notes: string) => Promise<void>;
   onSequenceQueued: (locationId: string) => Promise<void>;
@@ -66,6 +67,7 @@ export function LocationDetail({
   onBack,
   onLoadContacts,
   onLoadMore,
+  onDiscoverWithAI,
   onUpdateField,
   onSaveNotes,
   onSequenceQueued
@@ -659,6 +661,16 @@ export function LocationDetail({
                   : `Max ${MAX_CONTACT_SEARCH_LIMIT}`}
               </button>
             ) : null}
+            <button
+              className="secondaryButton"
+              type="button"
+              onClick={() => void onDiscoverWithAI()}
+              disabled={loadingLocationId === currentLocation.id || isPreviewLocation}
+              title="Use Tavily + OpenAI to find named decision-makers from public sources."
+            >
+              <Sparkles size={15} />
+              Find with AI
+            </button>
           </div>
         </div>
 

@@ -1458,6 +1458,45 @@ textarea {
 }
 
 /* ==========================================================================
+   Email sequence preview (research panel)
+   ========================================================================== */
+
+.emailSequencePreview {
+  grid-column: 1 / -1;
+  padding: 18px 0 4px;
+  border-top: 1px solid var(--ff-line-soft);
+}
+
+.emailPreviewContent {
+  background: #ffffff;
+  border: 1px solid var(--ff-line);
+  border-radius: var(--ff-radius-sm);
+  overflow: hidden;
+}
+
+.emailPreviewSubject {
+  padding: 10px 14px;
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: var(--ff-green-deep);
+  border-bottom: 1px solid var(--ff-line-soft);
+  background: var(--ff-cream-warm);
+}
+
+.emailPreviewBody {
+  margin: 0;
+  padding: 14px;
+  font-family: var(--ff-font-sans);
+  font-size: 0.85rem;
+  line-height: 1.65;
+  color: var(--ff-ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+/* ==========================================================================
    Sequence tabs
    ========================================================================== */
 

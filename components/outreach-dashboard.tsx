@@ -265,6 +265,54 @@ export function OutreachDashboard() {
     }
   }
 
+  async function discoverContactsWithAI() {
+    if (!currentLocation || isPreviewLocation) {
+      setPageError("AI contact discovery is unavailable in preview mode.");
+      return;
+    }
+
+    setLoadingLocationId(currentLocation.id);
+    setPageError(null);
+    setPageSuccess(null);
+
+    try {
+      const response = await fetch("/api/leads/ai-discover", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ locationId: currentLocation.id })
+      });
+
+      const data = (await response.json()) as {
+        leads?: import("@/lib/types").LeadRecord[];
+        foundCount?: number;
+        error?: string;
+      };
+
+      if (!response.ok) throw new Error(data.error || "AI contact discovery failed.");
+
+      // Merge AI-discovered contacts with the existing list (dedupe by lead id).
+      setLocationDetail((current) => {
+        if (!current || current.location.id !== currentLocation.id) return current;
+        const existingIds = new Set(current.contacts.map((record) => record.lead.id));
+        const additions = (data.leads ?? []).filter((record) => !existingIds.has(record.lead.id));
+        return { ...current, contacts: [...current.contacts, ...additions] };
+      });
+
+      await Promise.all([loadLocations(), loadDashboard()]);
+
+      const count = data.foundCount ?? 0;
+      setPageSuccess(
+        count > 0
+          ? `AI found ${count} named contact${count === 1 ? "" : "s"} from public sources.`
+          : "AI search didn't find any named contacts in public sources for this company."
+      );
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "AI contact discovery failed.");
+    } finally {
+      setLoadingLocationId(null);
+    }
+  }
+
   async function loadMoreContactsForLocation() {
     if (!currentLocation) return;
     const nextLimit = clampContactSearchLimit(currentContactSearchLimit + CONTACT_SEARCH_INCREMENT);
@@ -402,6 +450,7 @@ export function OutreachDashboard() {
               }}
               onLoadContacts={(options) => loadContactsForLocation(undefined, options)}
               onLoadMore={loadMoreContactsForLocation}
+              onDiscoverWithAI={discoverContactsWithAI}
               onUpdateField={updateCurrentLocationField}
               onSaveNotes={saveLocationNotes}
               onSequenceQueued={handleSequenceQueued}
