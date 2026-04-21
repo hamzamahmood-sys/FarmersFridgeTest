@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -43,6 +43,7 @@ import type {
   StoredEmail,
   ToneSettings
 } from "@/lib/types";
+import { isLowSignalPitch } from "@/lib/utils";
 
 type GmailStatus = {
   connected: boolean;
@@ -159,18 +160,6 @@ const DEPARTMENT_FILTER_LABELS: Record<Exclude<DepartmentFilter, "all">, string>
   csuite: "C-Suite",
   other: "Other"
 };
-
-function isLowSignalPitch(pitch: GeneratedPitch): boolean {
-  const body = pitch.body.toLowerCase();
-  const subject = pitch.subject.toLowerCase();
-
-  return (
-    body.includes("immediate uptick in employee satisfaction scores") ||
-    body.includes("similar companies are seeing real upticks in employee satisfaction") ||
-    body.includes("p.s. i thought this could be especially relevant for your") ||
-    subject.startsWith("quick question for ")
-  );
-}
 
 function locationToProspectCompany(location: SavedLocation): ProspectCompany {
   return {
@@ -305,6 +294,10 @@ export function OutreachDashboard() {
   const [savePending, startSaveTransition] = useTransition();
   const [pageError, setPageError] = useState<string | null>(null);
   const [pageSuccess, setPageSuccess] = useState<string | null>(null);
+
+  // Prevents double-firing loadContactsForLocation when the user clicks
+  // "Load More" rapidly before the first request completes.
+  const contactLoadInFlightRef = useRef(false);
 
   const selectedEmail = useMemo(
     () => filteredEmails(emails, emailFilter, emailSearch).find((email) => email.id === selectedEmailId)
@@ -618,9 +611,12 @@ export function OutreachDashboard() {
     const location = locationArg || currentLocation;
     if (!location) return;
 
+    if (contactLoadInFlightRef.current) return;
+
     const requestedLimit = clampContactSearchLimit(options?.limit ?? getContactSearchLimit(location));
     const preservedEmails = currentLocation?.id === location.id ? currentLocationEmails : [];
 
+    contactLoadInFlightRef.current = true;
     setLoadingLocationId(location.id);
     setPageError(null);
 
@@ -668,6 +664,7 @@ export function OutreachDashboard() {
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "Failed to load contacts.");
     } finally {
+      contactLoadInFlightRef.current = false;
       setLoadingLocationId(null);
     }
   }
@@ -994,6 +991,8 @@ export function OutreachDashboard() {
     setBulkResearchProgress({ total: unresearched.length, completed: 0, active: true });
     setPageError(null);
 
+    let failedCount = 0;
+
     for (const record of unresearched) {
       try {
         const existingResearch = researchByLeadId[record.lead.id];
@@ -1016,6 +1015,7 @@ export function OutreachDashboard() {
         void generateFollowUps(record, pitch.talkingPoints);
       } catch {
         // Keep going so one miss does not block the rest.
+        failedCount += 1;
       }
 
       setBulkResearchProgress((prev) =>
@@ -1025,6 +1025,12 @@ export function OutreachDashboard() {
 
     setBulkResearchProgress((prev) => (prev ? { ...prev, active: false } : null));
     setIsBulkResearching(false);
+
+    if (failedCount > 0) {
+      setPageError(
+        `${failedCount} of ${unresearched.length} contact${unresearched.length === 1 ? "" : "s"} failed to generate a pitch. You can retry them individually.`
+      );
+    }
   }
 
   async function queueLeadSequence(record: LeadRecord) {

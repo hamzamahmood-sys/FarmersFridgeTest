@@ -193,6 +193,23 @@ function stripLegacySpecificityPostscript(body: string): string {
     .trim();
 }
 
+/**
+ * Returns true when a cached or generated pitch contains generic fallback copy
+ * that is not worth showing or serving from the cache.  Defined here so the
+ * API route and the dashboard always use the same detection logic.
+ */
+export function isLowSignalPitch(pitch: { subject: string; body: string }): boolean {
+  const body = pitch.body.toLowerCase();
+  const subject = pitch.subject.toLowerCase();
+
+  return (
+    body.includes("immediate uptick in employee satisfaction scores") ||
+    body.includes("similar companies are seeing real upticks in employee satisfaction") ||
+    body.includes("p.s. i thought this could be especially relevant for your") ||
+    subject.startsWith("quick question for ")
+  );
+}
+
 export function ensurePitchSpecificity(body: string, subject: string, record: LeadRecord) {
   const evidence = [
     record.company.hqCity,

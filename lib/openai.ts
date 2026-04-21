@@ -3,6 +3,7 @@ import { env } from "@/lib/env";
 import type { GeneratedPitch, LeadRecord, ToneSettings } from "@/lib/types";
 import { ensurePitchSpecificity, formatLocation } from "@/lib/utils";
 import { researchCompany } from "@/lib/tavily";
+import { OPENAI_MODEL, OPENAI_TIMEOUT_MS } from "@/lib/constants";
 
 function getOpenAIClient() {
   return new OpenAI({
@@ -192,16 +193,34 @@ async function generateFollowUpPitch(
   ].join("\n");
 
   try {
-    const response = await getOpenAIClient().chat.completions.create({
-      model: "gpt-4.1",
-      temperature: 0.6,
-      max_tokens: 400,
-      response_format: { type: "json_object" },
-      messages: [{ role: "user", content: prompt }]
-    });
+    const response = await getOpenAIClient().chat.completions.create(
+      {
+        model: OPENAI_MODEL,
+        temperature: 0.6,
+        max_tokens: 400,
+        response_format: { type: "json_object" },
+        messages: [{ role: "user", content: prompt }]
+      },
+      { timeout: OPENAI_TIMEOUT_MS }
+    );
 
     const rawText = response.choices[0]?.message?.content || "{}";
-    const parsed = JSON.parse(rawText) as Partial<GeneratedPitch>;
+
+    let parsed: Partial<GeneratedPitch>;
+    try {
+      parsed = JSON.parse(rawText) as Partial<GeneratedPitch>;
+    } catch {
+      // OpenAI returned malformed JSON — return a safe minimal follow-up.
+      return {
+        subject: `Follow-up: ${record.lead.companyName}`,
+        body: `Hi ${firstName},\n\nJust following up on my last note about Farmer's Fridge. Happy to keep it brief — worth a quick chat?\n\nBest,\nFarmer's Fridge`,
+        talkingPoints: seedTalkingPoints,
+        bridgeInsight: bridge,
+        summary: "",
+        painPoints: [],
+        variableEvidence: []
+      };
+    }
 
     return {
       subject: normalizeGeneratedCopy(parsed.subject || `Follow-up: ${record.lead.companyName}`),
@@ -287,21 +306,27 @@ export async function generatePitch(
   ].join("\n");
 
   try {
-    const response = await getOpenAIClient().chat.completions.create({
-      model: "gpt-4.1",
-      temperature: 0.5,
-      max_tokens: 700,
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "user",
-          content: prompt
-        }
-      ]
-    });
+    const response = await getOpenAIClient().chat.completions.create(
+      {
+        model: OPENAI_MODEL,
+        temperature: 0.5,
+        max_tokens: 700,
+        response_format: { type: "json_object" },
+        messages: [{ role: "user", content: prompt }]
+      },
+      { timeout: OPENAI_TIMEOUT_MS }
+    );
 
     const rawText = response.choices[0]?.message?.content || "{}";
-    const parsed = JSON.parse(rawText) as Omit<GeneratedPitch, "variableEvidence">;
+
+    let parsed: Omit<GeneratedPitch, "variableEvidence">;
+    try {
+      parsed = JSON.parse(rawText) as Omit<GeneratedPitch, "variableEvidence">;
+    } catch {
+      // OpenAI returned malformed JSON — use the structured fallback pitch.
+      return buildFallbackPitch(record, seedTalkingPoints);
+    }
+
     parsed.subject = normalizeGeneratedCopy(parsed.subject ?? "");
     parsed.body = normalizeGeneratedCopy(parsed.body ?? "");
     const enforced = ensurePitchSpecificity(parsed.body, parsed.subject, record);

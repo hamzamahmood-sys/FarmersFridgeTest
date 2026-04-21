@@ -23,3 +23,11 @@ export const DEFAULT_SEARCH_FILTERS = {
 
 export const CONTACT_SEARCH_INCREMENT = 10;
 export const MAX_CONTACT_SEARCH_LIMIT = 100;
+
+// OpenAI
+export const OPENAI_MODEL = "gpt-4.1";
+/** Abort OpenAI requests that have been pending longer than this. */
+export const OPENAI_TIMEOUT_MS = 30_000;
+
+/** Discard a cached pitch that is older than this many hours. */
+export const PITCH_CACHE_TTL_HOURS = 24;

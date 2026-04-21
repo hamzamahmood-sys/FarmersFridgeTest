@@ -5,7 +5,8 @@ import { z, ZodError } from "zod";
 import { generatePitch } from "@/lib/openai";
 import { getCachedPitch, cachePitch, getToneSettings } from "@/lib/db";
 import { resolveCurrentUserId } from "@/lib/auth-user";
-import type { GeneratedPitch } from "@/lib/types";
+import { isLowSignalPitch } from "@/lib/utils";
+import { PITCH_CACHE_TTL_HOURS } from "@/lib/constants";
 
 const companySchema = z.object({
   industry: z.string().optional(),
@@ -41,18 +42,6 @@ const payloadSchema = z.object({
   step: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional().default(1)
 });
 
-function isLowSignalCachedPitch(pitch: GeneratedPitch): boolean {
-  const body = pitch.body.toLowerCase();
-  const subject = pitch.subject.toLowerCase();
-
-  return (
-    body.includes("immediate uptick in employee satisfaction scores") ||
-    body.includes("similar companies are seeing real upticks in employee satisfaction") ||
-    body.includes("p.s. i thought this could be especially relevant for your") ||
-    subject.startsWith("quick question for ")
-  );
-}
-
 export async function POST(request: Request) {
   try {
     const body = await request.json();
@@ -60,10 +49,11 @@ export async function POST(request: Request) {
     const leadId = payload.leadRecord.lead.id;
     const userId = await resolveCurrentUserId();
 
-    // Return cached pitch unless the user explicitly regenerated (only for step 1)
+    // Return cached pitch unless the user explicitly regenerated (only for step 1).
+    // Pitches older than PITCH_CACHE_TTL_HOURS are treated as stale and regenerated.
     if (!payload.forceRefresh && !payload.talkingPointsOverride && payload.step === 1) {
-      const cached = await getCachedPitch(leadId);
-      if (cached && !isLowSignalCachedPitch(cached)) {
+      const cached = await getCachedPitch(leadId, PITCH_CACHE_TTL_HOURS);
+      if (cached && !isLowSignalPitch(cached)) {
         return NextResponse.json({ pitch: cached, fromCache: true });
       }
     }

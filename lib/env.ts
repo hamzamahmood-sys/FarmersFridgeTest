@@ -6,6 +6,34 @@ function required(name: string): string {
   return value;
 }
 
+/**
+ * Call this once at process startup (e.g. from instrumentation.ts) to surface
+ * missing env vars immediately rather than on the first affected request.
+ *
+ * Google OAuth keys are only checked when AUTH_DEV_BYPASS is not set, matching
+ * the same conditional that the provider registration uses at runtime.
+ */
+export function validateEnv(): void {
+  const always = [
+    "AUTH_SECRET",
+    "DATABASE_URL",
+    "APOLLO_API_KEY",
+    "OPENAI_API_KEY",
+    "TAVILY_API_KEY"
+  ];
+
+  const needsGoogle = process.env.AUTH_DEV_BYPASS !== "true";
+  const googleKeys = needsGoogle ? ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"] : [];
+
+  const missing = [...always, ...googleKeys].filter((key) => !process.env[key]);
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Server startup failed — missing required environment variable${missing.length > 1 ? "s" : ""}: ${missing.join(", ")}`
+    );
+  }
+}
+
 export const env = {
   get apolloApiKey() {
     return required("APOLLO_API_KEY");
