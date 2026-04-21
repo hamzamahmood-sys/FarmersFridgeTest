@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { z, ZodError } from "zod";
 import { listSavedLocations, saveProspectCompanyAsLocation } from "@/lib/db";
-import { resolveCurrentUserId } from "@/lib/auth-user";
+import { AuthRequired, resolveCurrentUserId } from "@/lib/auth-user";
 
 const locationTypeSchema = z.enum(["hospital", "corporate", "university", "gym", "airport", "other", "all"]);
 const pipelineStageSchema = z.enum(["prospect", "meeting", "won", "lost", "all"]);
@@ -61,10 +61,12 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ locations });
   } catch (error) {
+    if (error instanceof AuthRequired) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     if (error instanceof ZodError) {
       return NextResponse.json({ error: error.errors[0]?.message ?? "Invalid request." }, { status: 400 });
     }
-
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to load locations." },
       { status: 500 }
@@ -80,10 +82,12 @@ export async function POST(request: Request) {
     const location = await saveProspectCompanyAsLocation(userId, company);
     return NextResponse.json({ location });
   } catch (error) {
+    if (error instanceof AuthRequired) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     if (error instanceof ZodError) {
       return NextResponse.json({ error: error.errors[0]?.message ?? "Invalid request." }, { status: 400 });
     }
-
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to save location." },
       { status: 500 }

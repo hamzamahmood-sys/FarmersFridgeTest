@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { z, ZodError } from "zod";
 import { deleteSavedLocation, getLocationDetail, updateSavedLocation } from "@/lib/db";
-import { resolveCurrentUserId } from "@/lib/auth-user";
+import { AuthRequired, resolveCurrentUserId } from "@/lib/auth-user";
 
 const updateSchema = z.object({
   about: z.string().optional(),
@@ -28,6 +28,9 @@ export async function GET(
 
     return NextResponse.json(detail);
   } catch (error) {
+    if (error instanceof AuthRequired) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to load location." },
       { status: 500 }
@@ -51,10 +54,12 @@ export async function PATCH(
 
     return NextResponse.json({ location });
   } catch (error) {
+    if (error instanceof AuthRequired) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     if (error instanceof ZodError) {
       return NextResponse.json({ error: error.errors[0]?.message ?? "Invalid request." }, { status: 400 });
     }
-
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to update location." },
       { status: 500 }
@@ -71,6 +76,9 @@ export async function DELETE(
     await deleteSavedLocation(userId, context.params.id);
     return NextResponse.json({ ok: true });
   } catch (error) {
+    if (error instanceof AuthRequired) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to delete location." },
       { status: 500 }

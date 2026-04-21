@@ -4,8 +4,9 @@ import { NextResponse } from "next/server";
 import { z, ZodError } from "zod";
 import { generatePitch } from "@/lib/openai";
 import { getCachedPitch, cachePitch, getToneSettings } from "@/lib/db";
-import { resolveCurrentUserId } from "@/lib/auth-user";
+import { AuthRequired, resolveCurrentUserId } from "@/lib/auth-user";
 import { isLowSignalPitch } from "@/lib/utils";
+import { checkRateLimit, getRateLimitKey } from "@/lib/rate-limit";
 import { PITCH_CACHE_TTL_HOURS } from "@/lib/constants";
 
 const companySchema = z.object({
@@ -43,6 +44,14 @@ const payloadSchema = z.object({
 });
 
 export async function POST(request: Request) {
+  const { allowed, retryAfterMs } = checkRateLimit(getRateLimitKey(request, "pitch"), 20, 60_000);
+  if (!allowed) {
+    return NextResponse.json(
+      { error: "Too many requests. Please wait a moment before trying again." },
+      { status: 429, headers: { "Retry-After": String(Math.ceil(retryAfterMs / 1000)) } }
+    );
+  }
+
   try {
     const body = await request.json();
     const payload = payloadSchema.parse(body);
@@ -74,6 +83,9 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ pitch, fromCache: false });
   } catch (error) {
+    if (error instanceof AuthRequired) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     if (error instanceof ZodError) {
       return NextResponse.json({ error: error.errors[0]?.message ?? "Invalid request." }, { status: 400 });
     }

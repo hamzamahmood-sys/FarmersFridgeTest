@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { z, ZodError } from "zod";
 import { listEmails, replaceEmailsForLead } from "@/lib/db";
-import { resolveCurrentUserId } from "@/lib/auth-user";
+import { AuthRequired, resolveCurrentUserId } from "@/lib/auth-user";
 
 const emailStatusSchema = z.enum(["generated", "approved", "sent", "all"]);
 const locationTypeSchema = z.enum(["hospital", "corporate", "university", "gym", "airport", "other"]);
@@ -51,10 +51,12 @@ export async function GET(request: Request) {
     const emails = await listEmails({ userId, ...parsed });
     return NextResponse.json({ emails });
   } catch (error) {
+    if (error instanceof AuthRequired) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     if (error instanceof ZodError) {
       return NextResponse.json({ error: error.errors[0]?.message ?? "Invalid request." }, { status: 400 });
     }
-
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to load emails." },
       { status: 500 }
@@ -70,10 +72,12 @@ export async function POST(request: Request) {
     const emails = await replaceEmailsForLead(userId, payload.leadId, payload.emails);
     return NextResponse.json({ emails });
   } catch (error) {
+    if (error instanceof AuthRequired) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     if (error instanceof ZodError) {
       return NextResponse.json({ error: error.errors[0]?.message ?? "Invalid request." }, { status: 400 });
     }
-
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to save emails." },
       { status: 500 }

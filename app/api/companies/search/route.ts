@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { z, ZodError } from "zod";
 import { searchCompanies } from "@/lib/apollo";
 import { estimateApolloCredits } from "@/lib/utils";
+import { checkRateLimit, getRateLimitKey } from "@/lib/rate-limit";
 
 const searchSchema = z.object({
   personas: z
@@ -17,6 +18,14 @@ const searchSchema = z.object({
 });
 
 export async function POST(request: Request) {
+  const { allowed, retryAfterMs } = checkRateLimit(getRateLimitKey(request, "companies-search"), 10, 60_000);
+  if (!allowed) {
+    return NextResponse.json(
+      { error: "Too many requests. Please wait a moment before trying again." },
+      { status: 429, headers: { "Retry-After": String(Math.ceil(retryAfterMs / 1000)) } }
+    );
+  }
+
   try {
     const body = await request.json();
     const filters = searchSchema.parse(body);

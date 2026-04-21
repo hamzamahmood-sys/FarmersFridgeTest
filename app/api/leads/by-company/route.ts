@@ -5,6 +5,7 @@ import { z, ZodError } from "zod";
 import { searchLeadsForCompany } from "@/lib/apollo";
 import { MAX_CONTACT_SEARCH_LIMIT } from "@/lib/constants";
 import { cacheLeads } from "@/lib/db";
+import { checkRateLimit, getRateLimitKey } from "@/lib/rate-limit";
 
 const searchFiltersSchema = z.object({
   personas: z
@@ -44,6 +45,14 @@ const bodySchema = z.object({
 });
 
 export async function POST(request: Request) {
+  const { allowed, retryAfterMs } = checkRateLimit(getRateLimitKey(request, "by-company"), 15, 60_000);
+  if (!allowed) {
+    return NextResponse.json(
+      { error: "Too many requests. Please wait a moment before trying again." },
+      { status: 429, headers: { "Retry-After": String(Math.ceil(retryAfterMs / 1000)) } }
+    );
+  }
+
   try {
     const body = await request.json();
     const payload = bodySchema.parse(body);
