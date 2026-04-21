@@ -1,8 +1,6 @@
 import { personaToApolloTitles, resolveContactDepartment, scoreCompanyFit, sortLeadRecords } from "@/lib/utils";
 import type { LeadRecord, ProspectCompany, SearchFilters } from "@/lib/types";
 import { apolloFetch } from "./client";
-import { enrichLeadContactFromApollo } from "./enrich";
-import { findEmailTomba, isTombaConfigured } from "@/lib/tomba";
 import {
   getCompactCompanyNameVariant,
   getCompanyKeywordFallback,
@@ -64,8 +62,6 @@ const COMMON_SECOND_LEVEL_DOMAIN_SUFFIXES = new Set([
   "net",
   "org"
 ]);
-
-const CONTACT_ENRICHMENT_LIMIT = 10;
 
 function getOrganizationResults(
   response: ApolloOrganizationSearchResponse
@@ -230,57 +226,6 @@ function sortPeopleForOutreach(
 
     return getOrganizationName(a).localeCompare(getOrganizationName(b));
   });
-}
-
-function splitFullName(name: string): { firstName: string; lastName: string } {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return { firstName: "", lastName: "" };
-  if (parts.length === 1) return { firstName: parts[0] || "", lastName: "" };
-
-  return {
-    firstName: parts[0] || "",
-    lastName: parts.slice(1).join(" ")
-  };
-}
-
-async function enrichTopContact(record: LeadRecord): Promise<LeadRecord> {
-  const apolloResult = await enrichLeadContactFromApollo(record);
-  let enrichedRecord = apolloResult.leadRecord;
-
-  if (isRealApolloEmail(enrichedRecord.lead.email)) {
-    return {
-      ...enrichedRecord,
-      lead: {
-        ...enrichedRecord.lead,
-        emailSource: "apollo"
-      }
-    };
-  }
-
-  if (!isTombaConfigured() || !enrichedRecord.lead.companyDomain) {
-    return enrichedRecord;
-  }
-
-  const { firstName, lastName } = splitFullName(enrichedRecord.lead.name);
-  if (!firstName) return enrichedRecord;
-
-  const tombaEmail = await findEmailTomba(firstName, lastName, enrichedRecord.lead.companyDomain, {
-    companyName: enrichedRecord.lead.companyName,
-    fullName: enrichedRecord.lead.name
-  });
-
-  if (!tombaEmail) {
-    return enrichedRecord;
-  }
-
-  return {
-    ...enrichedRecord,
-    lead: {
-      ...enrichedRecord.lead,
-      email: tombaEmail,
-      emailSource: "tomba"
-    }
-  };
 }
 
 function toProspectCompany(
@@ -623,45 +568,7 @@ export async function searchLeadsForCompany(
     return record;
   });
 
-  const sortedLeads = sortLeadRecords(leads);
-  const enrichmentCount = Math.min(sortedLeads.length, CONTACT_ENRICHMENT_LIMIT);
-
-  if (enrichmentCount === 0) {
-    return sortedLeads;
-  }
-
-  const enrichedResults = await Promise.allSettled(
-    sortedLeads
-      .slice(0, enrichmentCount)
-      .map((record) => enrichTopContact(record))
-  );
-
-  return sortLeadRecords(
-    sortedLeads.map((record, index) => {
-      if (index >= enrichmentCount) return record;
-
-      const result = enrichedResults[index];
-      if (!result || result.status !== "fulfilled") {
-        return record;
-      }
-
-      return {
-        ...record,
-        ...result.value,
-        lead: {
-          ...record.lead,
-          ...result.value.lead,
-          emailSource:
-            result.value.lead.emailSource
-            || (isRealApolloEmail(result.value.lead.email) ? "apollo" : record.lead.emailSource),
-          source: record.lead.source
-        },
-        company: {
-          ...record.company,
-          ...result.value.company
-        },
-        priorityScore: record.priorityScore
-      };
-    })
-  );
+  // Keep contact loading on Apollo's free people search endpoint.
+  // Paid enrichment only runs later on explicit email lookup / sequence actions.
+  return sortLeadRecords(leads);
 }

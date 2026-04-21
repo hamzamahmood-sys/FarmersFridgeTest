@@ -58,34 +58,15 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const payload = payloadSchema.parse(body);
-
-    const apolloResult = await enrichLeadContactFromApollo(payload.leadRecord);
-    let leadRecord = apolloResult.leadRecord;
-    let source = apolloResult.source;
+    let leadRecord = payload.leadRecord;
+    let source: "existing" | "apollo" | "tomba" | "none" = isRealApolloEmail(leadRecord.lead.email)
+      ? "existing"
+      : "none";
     let hasResolvedEmail = isRealApolloEmail(leadRecord.lead.email);
-    const providersTried = ["apollo"];
+    const providersTried: string[] = [];
     const providerNotes: string[] = [];
     const tombaConfigured = isTombaConfigured();
-
-    console.log("[enrich-email]", {
-      leadId: payload.leadRecord.lead.id,
-      name: payload.leadRecord.lead.name,
-      apolloSource: apolloResult.source,
-      apolloEmail: leadRecord.lead.email || "(none)",
-      emailStatus: apolloResult.emailStatus,
-      companyDomain: leadRecord.lead.companyDomain,
-      tombaConfigured
-    });
-
-    if (!hasResolvedEmail && leadRecord.lead.email) {
-      leadRecord = {
-        ...leadRecord,
-        lead: {
-          ...leadRecord.lead,
-          email: ""
-        }
-      };
-    }
+    let apolloEmailStatus: string | undefined;
 
     if (!hasResolvedEmail && !leadRecord.lead.companyDomain) {
       const resolvedDomain = await resolveCompanyDomain(leadRecord);
@@ -101,35 +82,84 @@ export async function POST(request: Request) {
       }
     }
 
-    if (!hasResolvedEmail && leadRecord.lead.companyDomain) {
-      const { firstName, lastName } = splitFullName(leadRecord.lead.name);
+    const tryTombaLookup = async (): Promise<boolean> => {
+      if (hasResolvedEmail || !leadRecord.lead.companyDomain) return false;
 
-      if (!tombaConfigured) {
-        providerNotes.push("Apollo returned no email and Tomba fallback is not configured on the server.");
-      } else if (firstName) {
-        providersTried.push("tomba");
-        const tombaEmail = await findEmailTomba(firstName, lastName, leadRecord.lead.companyDomain, {
-          companyName: leadRecord.lead.companyName,
-          fullName: leadRecord.lead.name
-        });
-        if (tombaEmail) {
-          leadRecord = {
-            ...leadRecord,
-            lead: {
-              ...leadRecord.lead,
-              email: tombaEmail
-            }
-          };
-          source = "tomba";
-          hasResolvedEmail = true;
-        } else {
-          providerNotes.push("Apollo returned no email and Tomba did not find one for the company domain.");
+      const { firstName, lastName } = splitFullName(leadRecord.lead.name);
+      if (!tombaConfigured) return false;
+      if (!firstName || !lastName) return false;
+
+      providersTried.push("tomba");
+      const tombaEmail = await findEmailTomba(firstName, lastName, leadRecord.lead.companyDomain, {
+        companyName: leadRecord.lead.companyName,
+        fullName: leadRecord.lead.name
+      });
+
+      if (!tombaEmail) {
+        return false;
+      }
+
+      leadRecord = {
+        ...leadRecord,
+        lead: {
+          ...leadRecord.lead,
+          email: tombaEmail
         }
-      } else {
-        providerNotes.push("Apollo returned no email and the contact name was incomplete, so Tomba was skipped.");
+      };
+      source = "tomba";
+      hasResolvedEmail = true;
+      return true;
+    };
+
+    if (!hasResolvedEmail) {
+      await tryTombaLookup();
+    }
+
+    if (!hasResolvedEmail) {
+      providersTried.push("apollo");
+      const apolloResult = await enrichLeadContactFromApollo(leadRecord);
+      leadRecord = apolloResult.leadRecord;
+      source = apolloResult.source;
+      apolloEmailStatus = apolloResult.emailStatus;
+      hasResolvedEmail = isRealApolloEmail(leadRecord.lead.email);
+    }
+
+    console.log("[enrich-email]", {
+      leadId: payload.leadRecord.lead.id,
+      name: payload.leadRecord.lead.name,
+      lookupSource: source,
+      resolvedEmail: leadRecord.lead.email || "(none)",
+      emailStatus: apolloEmailStatus,
+      companyDomain: leadRecord.lead.companyDomain,
+      tombaConfigured
+    });
+
+    if (!hasResolvedEmail && leadRecord.lead.email) {
+      leadRecord = {
+        ...leadRecord,
+        lead: {
+          ...leadRecord.lead,
+          email: ""
+        }
+      };
+    }
+
+    if (!hasResolvedEmail && !providersTried.includes("tomba")) {
+      const tombaFound = await tryTombaLookup();
+      if (!tombaFound) {
+        const { firstName, lastName } = splitFullName(leadRecord.lead.name);
+        if (!tombaConfigured) {
+          providerNotes.push("Tomba fallback is not configured on the server.");
+        } else if (!leadRecord.lead.companyDomain) {
+          providerNotes.push("We couldn't resolve a company domain, so Tomba was skipped.");
+        } else if (!firstName || !lastName) {
+          providerNotes.push("The contact name was incomplete, so Tomba was skipped.");
+        } else {
+          providerNotes.push("Tomba did not find an email for the company domain.");
+        }
       }
     } else if (!hasResolvedEmail) {
-      providerNotes.push("Apollo returned no email and we couldn't resolve a company domain, so Tomba was skipped.");
+      providerNotes.push("No email was found from the configured providers.");
     }
 
     const resolvedEmailSource: "apollo" | "tomba" | "existing" | undefined = hasResolvedEmail
@@ -159,7 +189,7 @@ export async function POST(request: Request) {
       leadRecord,
       source,
       emailFound: hasResolvedEmail,
-      emailStatus: apolloResult.emailStatus,
+      emailStatus: apolloEmailStatus,
       providersTried,
       providerNotes
     });

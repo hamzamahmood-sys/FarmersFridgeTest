@@ -278,11 +278,19 @@ export function LocationDetail({
     }
   }
 
-  function getContactSourceBadge(record: LeadRecord): { label: string; className: string } {
+  function getContactSourceBadge(record: LeadRecord): { label: string; className: string; title: string } {
     if (record.lead.source === "ai") {
-      return { label: "AI", className: "contactSourceBadge contactSourceBadge--ai" };
+      return {
+        label: "AI",
+        className: "contactSourceBadge contactSourceBadge--ai",
+        title: "Found from public web research."
+      };
     }
-    return { label: "Apollo", className: "contactSourceBadge contactSourceBadge--apollo" };
+    return {
+      label: "Apollo Search",
+      className: "contactSourceBadge contactSourceBadge--apollo",
+      title: "Loaded from Apollo's search endpoint. Email enrichment runs only on demand."
+    };
   }
 
   type PersonaOption = NonNullable<Parameters<Props["onLoadContacts"]>[0]>["personas"];
@@ -822,6 +830,9 @@ export function LocationDetail({
               {visibleContacts.length} visible of {currentContacts.length} loaded contacts at this location.
               {currentContacts.length > 0 ? ` Search depth: ${currentContactSearchLimit}.` : ""}
             </p>
+            <p className="helperText">
+              Contact loading stays on Apollo search. Paid email enrichment only runs when you queue a sequence for a contact that still needs an email.
+            </p>
           </div>
           <div className="sectionControls">
             <input
@@ -943,7 +954,11 @@ export function LocationDetail({
                           <strong>{lead.name}</strong>
                           {(() => {
                             const badge = getContactSourceBadge(record);
-                            return <span className={badge.className}>{badge.label}</span>;
+                            return (
+                              <span className={badge.className} title={badge.title}>
+                                {badge.label}
+                              </span>
+                            );
                           })()}
                         </div>
                         <span>{lead.companyName}</span>
