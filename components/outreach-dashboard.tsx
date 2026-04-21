@@ -12,6 +12,7 @@ import {
   Download,
   LayoutDashboard,
   Mail,
+  Plus,
   RefreshCw,
   Search,
   Send,
@@ -20,7 +21,12 @@ import {
   Upload,
   Zap
 } from "lucide-react";
-import { DEFAULT_SEARCH_FILTERS, PERSONA_LABELS } from "@/lib/constants";
+import {
+  CONTACT_SEARCH_INCREMENT,
+  DEFAULT_SEARCH_FILTERS,
+  MAX_CONTACT_SEARCH_LIMIT,
+  PERSONA_LABELS
+} from "@/lib/constants";
 import type {
   ApolloCreditEstimate,
   DashboardStats,
@@ -278,6 +284,7 @@ export function OutreachDashboard() {
   });
   const [notesDraft, setNotesDraft] = useState("");
   const [contactSearch, setContactSearch] = useState("");
+  const [contactLimitByLocationId, setContactLimitByLocationId] = useState<Record<string, number>>({});
   const [departmentFilter, setDepartmentFilter] = useState<DepartmentFilter>("all");
   const [researchByLeadId, setResearchByLeadId] = useState<Record<string, ResearchState>>({});
   const [expandedLeadId, setExpandedLeadId] = useState<string | null>(null);
@@ -310,6 +317,13 @@ export function OutreachDashboard() {
   const currentContacts = locationDetail?.contacts ?? [];
   const currentLocationEmails = locationDetail?.emails ?? [];
   const isPreviewLocation = isPreviewLocationId(currentLocation?.id);
+  const currentContactSearchLimit = currentLocation
+    ? getContactSearchLimit(currentLocation)
+    : clampContactSearchLimit(filters.limit);
+  const nextContactSearchIncrement = Math.min(
+    CONTACT_SEARCH_INCREMENT,
+    Math.max(0, MAX_CONTACT_SEARCH_LIMIT - currentContactSearchLimit)
+  );
 
   const visibleLocations = useMemo(() => {
     return locations.filter((location) => {
@@ -480,6 +494,27 @@ export function OutreachDashboard() {
     setToneSettings(data.tone);
   }
 
+  function clampContactSearchLimit(limit: number): number {
+    return Math.max(1, Math.min(MAX_CONTACT_SEARCH_LIMIT, Math.floor(limit)));
+  }
+
+  function getContactSearchLimit(location: SavedLocation | null | undefined): number {
+    if (!location) {
+      return clampContactSearchLimit(filters.limit);
+    }
+
+    const requestedLimit = contactLimitByLocationId[location.id];
+    if (typeof requestedLimit === "number" && Number.isFinite(requestedLimit)) {
+      return clampContactSearchLimit(requestedLimit);
+    }
+
+    if (currentLocation?.id === location.id && currentContacts.length > 0) {
+      return clampContactSearchLimit(currentContacts.length);
+    }
+
+    return clampContactSearchLimit(filters.limit);
+  }
+
   async function openLocation(locationId: string) {
     setLoadingLocationId(locationId);
     setPageError(null);
@@ -495,6 +530,14 @@ export function OutreachDashboard() {
 
       setSelectedLocationId(locationId);
       setLocationDetail(data);
+      setContactLimitByLocationId((current) => {
+        if (data.contacts.length === 0) return current;
+
+        const nextLimit = Math.max(current[locationId] ?? 0, data.contacts.length);
+        if (nextLimit === current[locationId]) return current;
+
+        return { ...current, [locationId]: nextLimit };
+      });
       setExpandedLeadId(null);
       setResearchByLeadId({});
       setEmailLookupStateByLeadId({});
@@ -568,9 +611,15 @@ export function OutreachDashboard() {
     }
   }
 
-  async function loadContactsForLocation(locationArg?: SavedLocation) {
+  async function loadContactsForLocation(
+    locationArg?: SavedLocation,
+    options?: { limit?: number }
+  ) {
     const location = locationArg || currentLocation;
     if (!location) return;
+
+    const requestedLimit = clampContactSearchLimit(options?.limit ?? getContactSearchLimit(location));
+    const preservedEmails = currentLocation?.id === location.id ? currentLocationEmails : [];
 
     setLoadingLocationId(location.id);
     setPageError(null);
@@ -583,7 +632,8 @@ export function OutreachDashboard() {
           company: locationToProspectCompany(location),
           filters: {
             ...filters,
-            industryQuery: query || location.companyName
+            industryQuery: query || location.companyName,
+            limit: requestedLimit
           },
           searchQuery: query || location.companyName,
           locationId: isPreviewLocationId(location.id) ? undefined : location.id
@@ -599,13 +649,18 @@ export function OutreachDashboard() {
         throw new Error(data.error || "Failed to load contacts.");
       }
 
+      setContactLimitByLocationId((current) =>
+        current[location.id] === requestedLimit
+          ? current
+          : { ...current, [location.id]: requestedLimit }
+      );
       setLocationDetail((current) =>
         current && current.location.id === location.id
           ? { ...current, contacts: data.leads ?? [] }
           : {
               location,
               contacts: data.leads ?? [],
-              emails: currentLocationEmails
+              emails: preservedEmails
             }
       );
 
@@ -615,6 +670,20 @@ export function OutreachDashboard() {
     } finally {
       setLoadingLocationId(null);
     }
+  }
+
+  async function loadMoreContactsForLocation() {
+    if (!currentLocation) return;
+
+    const nextLimit = clampContactSearchLimit(currentContactSearchLimit + CONTACT_SEARCH_INCREMENT);
+    if (nextLimit === currentContactSearchLimit) {
+      setPageError(null);
+      setPageSuccess(`You're already searching up to ${MAX_CONTACT_SEARCH_LIMIT} contacts for this company.`);
+      return;
+    }
+
+    setPageSuccess(null);
+    await loadContactsForLocation(currentLocation, { limit: nextLimit });
   }
 
   async function runSearch() {
@@ -1845,6 +1914,7 @@ export function OutreachDashboard() {
             <p>{currentLocation.about || "No background captured yet. Load contacts or update notes to build out the account brief."}</p>
             <div className="locationCounts locationCounts--detail">
               <span>{currentContacts.length} contacts loaded</span>
+              <span>search depth {currentContactSearchLimit}</span>
               <span>{currentLocationEmails.length} queued emails</span>
             </div>
             {isPreviewLocation ? (
@@ -1880,6 +1950,7 @@ export function OutreachDashboard() {
               <h2>Contacts</h2>
               <p>
                 {visibleContacts.length} visible of {currentContacts.length} loaded contacts at this location.
+                {currentContacts.length > 0 ? ` Search depth: ${currentContactSearchLimit}.` : ""}
               </p>
             </div>
             <div className="sectionControls">
@@ -1893,6 +1964,19 @@ export function OutreachDashboard() {
                 <RefreshCw size={15} />
                 {loadingLocationId === currentLocation.id ? "Loading..." : currentContacts.length > 0 ? "Refresh Contacts" : "Find Contacts"}
               </button>
+              {currentContacts.length > 0 ? (
+                <button
+                  className="secondaryButton"
+                  type="button"
+                  onClick={() => void loadMoreContactsForLocation()}
+                  disabled={loadingLocationId === currentLocation.id || nextContactSearchIncrement === 0}
+                >
+                  <Plus size={15} />
+                  {nextContactSearchIncrement > 0
+                    ? `Search ${nextContactSearchIncrement} More`
+                    : `Max ${MAX_CONTACT_SEARCH_LIMIT}`}
+                </button>
+              ) : null}
             </div>
           </div>
 

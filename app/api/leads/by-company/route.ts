@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { z, ZodError } from "zod";
 import { searchLeadsForCompany } from "@/lib/apollo";
+import { MAX_CONTACT_SEARCH_LIMIT } from "@/lib/constants";
 import { cacheLeads } from "@/lib/db";
 
 const searchFiltersSchema = z.object({
@@ -13,7 +14,7 @@ const searchFiltersSchema = z.object({
   industryQuery: z.string().min(2),
   states: z.array(z.string()).default([]),
   employeeMin: z.number().min(1),
-  limit: z.number().min(1).max(50)
+  limit: z.number().min(1).max(MAX_CONTACT_SEARCH_LIMIT)
 });
 
 const companySchema = z.object({

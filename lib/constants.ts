@@ -20,3 +20,6 @@ export const DEFAULT_SEARCH_FILTERS = {
   employeeMin: 200,
   limit: 10
 };
+
+export const CONTACT_SEARCH_INCREMENT = 10;
+export const MAX_CONTACT_SEARCH_LIMIT = 100;
