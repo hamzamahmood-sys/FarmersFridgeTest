@@ -81,6 +81,7 @@ describe("searchLeads", () => {
 
     expect(leads).toHaveLength(1);
     expect(leads[0]?.lead.companyName).toBe("Rush University Medical Center");
+    expect(leads[0]?.lead.department).toBe("workplace");
     expect(
       mockApolloFetch.mock.calls.some(([, body]) => {
         const params = body as Record<string, unknown>;
@@ -128,6 +129,7 @@ describe("searchLeads", () => {
 
     expect(leads).toHaveLength(1);
     expect(leads[0]?.lead.companyName).toBe("Hudson Legal Group");
+    expect(leads[0]?.lead.department).toBe("csuite");
     expect(
       mockApolloFetch.mock.calls.some(([, body]) => {
         const params = body as Record<string, unknown>;

@@ -15,7 +15,7 @@ import type {
   StoredEmail,
   ToneSettings
 } from "@/lib/types";
-import { inferContactDepartment, inferLocationType } from "@/lib/utils";
+import { inferLocationType, resolveContactDepartment } from "@/lib/utils";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -67,17 +67,22 @@ function asStringArray(value: unknown): string[] {
 }
 
 function rowToLeadRecord(row: Record<string, unknown>): LeadRecord {
+  const title = (row.title as string) ?? "Unknown Title";
+
   return {
     lead: {
       id: row.id as string,
       name: row.name as string,
       email: (row.email as string) ?? "",
-      title: (row.title as string) ?? "Unknown Title",
+      title,
       linkedinUrl: (row.linkedin_url as string) ?? undefined,
       companyName: row.company_name as string,
       companyDomain: (row.company_domain as string) ?? undefined,
       organizationId: (row.organization_id as string) ?? undefined,
-      department: (row.department as LeadRecord["lead"]["department"]) ?? undefined,
+      department: resolveContactDepartment(
+        (row.department as LeadRecord["lead"]["department"]) ?? undefined,
+        title
+      ),
       locationId: (row.location_id as string) ?? undefined,
       source: (row.source as LeadRecord["lead"]["source"]) ?? undefined,
       emailSource: (row.email_source as LeadRecord["lead"]["emailSource"]) ?? undefined
@@ -176,7 +181,7 @@ export async function cacheLeads(
     await withTransaction(async (client) => {
       for (const record of records) {
         const locationId = options?.locationId ?? record.lead.locationId ?? null;
-        const department = record.lead.department ?? inferContactDepartment(record.lead.title);
+        const department = resolveContactDepartment(record.lead.department, record.lead.title);
 
         await client.query(
           `INSERT INTO leads (

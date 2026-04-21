@@ -4,7 +4,9 @@ import {
   priorityLead,
   sortLeadRecords,
   personaToApolloTitles,
-  ensurePitchSpecificity
+  ensurePitchSpecificity,
+  inferContactDepartment,
+  resolveContactDepartment
 } from "@/lib/utils";
 import type { LeadRecord } from "@/lib/types";
 
@@ -133,6 +135,28 @@ describe("personaToApolloTitles", () => {
     expect(result).toContain("Office Manager");
     expect(result).toContain("Facilities Director");
     expect(new Set(result).size).toBe(result.length);
+  });
+});
+
+describe("inferContactDepartment", () => {
+  it("maps common Apollo operations and admin titles away from other", () => {
+    expect(inferContactDepartment("Practice Manager")).toBe("workplace");
+    expect(inferContactDepartment("Administrative Director")).toBe("workplace");
+    expect(inferContactDepartment("Director of Environmental Services")).toBe("facilities");
+    expect(inferContactDepartment("Managing Partner")).toBe("csuite");
+    expect(inferContactDepartment("Director of Food Services")).toBe("fnb");
+    expect(inferContactDepartment("Chief People Officer")).toBe("hr_people");
+  });
+});
+
+describe("resolveContactDepartment", () => {
+  it("upgrades missing or other departments using the title", () => {
+    expect(resolveContactDepartment(undefined, "Practice Manager")).toBe("workplace");
+    expect(resolveContactDepartment("other", "Managing Partner")).toBe("csuite");
+  });
+
+  it("preserves an already-specific department", () => {
+    expect(resolveContactDepartment("facilities", "Managing Partner")).toBe("facilities");
   });
 });
 

@@ -1,4 +1,4 @@
-import { personaToApolloTitles, scoreCompanyFit, sortLeadRecords } from "@/lib/utils";
+import { personaToApolloTitles, resolveContactDepartment, scoreCompanyFit, sortLeadRecords } from "@/lib/utils";
 import type { LeadRecord, ProspectCompany, SearchFilters } from "@/lib/types";
 import { apolloFetch } from "./client";
 import {
@@ -531,12 +531,13 @@ export async function searchLeadsForCompany(
     };
 
     const apolloEmail = isRealApolloEmail(person.email) ? (person.email as string) : "";
+    const titleValue = typeof person.title === "string" ? person.title : "Unknown Title";
     const record: LeadRecord = {
       lead: {
         id: typeof person.id === "string" || typeof person.id === "number" ? String(person.id) : `lead-${index}`,
         name: getPersonName(person) || "Unknown Contact",
         email: apolloEmail,
-        title: typeof person.title === "string" ? person.title : "Unknown Title",
+        title: titleValue,
         linkedinUrl:
           typeof person.linkedin_url === "string"
             ? person.linkedin_url
@@ -552,6 +553,7 @@ export async function searchLeadsForCompany(
             ? normalizeDomain(person.organization_website_url)
             : normalizeDomain(organizationPrimaryDomain) || company.domain,
         organizationId: company.id,
+        department: resolveContactDepartment(undefined, titleValue),
         source: "apollo",
         emailSource: apolloEmail ? "apollo" : undefined
       },

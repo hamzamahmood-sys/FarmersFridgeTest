@@ -147,6 +147,7 @@ describe("company-first Apollo search", () => {
     expect(leads).toHaveLength(1);
     expect(leads[0]?.lead.companyName).toBe("Hudson Legal Group");
     expect(leads[0]?.lead.organizationId).toBe("org-1");
+    expect(leads[0]?.lead.department).toBe("workplace");
     expect(
       mockApolloFetch.mock.calls.some(([, body]) => {
         const params = body as Record<string, unknown>;

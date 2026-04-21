@@ -114,30 +114,145 @@ export function inferLocationType(input: {
   return "other";
 }
 
-export function inferContactDepartment(title?: string): ContactDepartment {
-  const normalized = (title || "").toLowerCase();
+const FACILITIES_TITLE_PATTERNS = [
+  /\bfacilit(?:y|ies)\b/,
+  /\bworkplace services\b/,
+  /\bsite services\b/,
+  /\benvironmental services?\b/,
+  /\bbuilding(?:s)?\b/,
+  /\bproperty\b/,
+  /\breal estate\b/,
+  /\bphysical plant\b/,
+  /\bspace planning\b/,
+  /\bmaintenance\b/,
+  /\bjanitorial\b/
+];
 
-  if (/(facilit|real estate|property|workplace services|operations)/.test(normalized)) {
+const HR_PEOPLE_TITLE_PATTERNS = [
+  /\bpeople ops?\b/,
+  /\bpeople operations?\b/,
+  /\bpeople\b/,
+  /\bhuman resources?\b/,
+  /\bhr\b/,
+  /\btalent\b/,
+  /\brecruit(?:er|ing|ment)?\b/,
+  /\bemployee (?:experience|engagement|relations)\b/,
+  /\bbenefits?\b/,
+  /\bcompensation\b/,
+  /\bculture\b/,
+  /\bhuman capital\b/,
+  /\btotal rewards?\b/
+];
+
+const WORKPLACE_TITLE_PATTERNS = [
+  /\bworkplace\b/,
+  /\boffice\b/,
+  /\badmin(?:istration|istrative)?\b/,
+  /\bpractice manager\b/,
+  /\bclinic manager\b/,
+  /\blegal operations?\b/,
+  /\boffice services?\b/,
+  /\bexperience manager\b/,
+  /\bcommunity manager\b/,
+  /\bguest services?\b/,
+  /\bexecutive assistant\b/,
+  /\bchief of staff\b/,
+  /\bfront desk\b/
+];
+
+const FNB_TITLE_PATTERNS = [
+  /\bfood\b/,
+  /\bbeverage\b/,
+  /\bdining\b/,
+  /\bcafeteria\b/,
+  /\bcatering\b/,
+  /\bculinary\b/,
+  /\bhospitality\b/,
+  /\brestaurant\b/,
+  /\bcafe\b/,
+  /\bkitchen\b/,
+  /\bchef\b/
+];
+
+const CSUITE_TITLE_PATTERNS = [
+  /\bchief\b/,
+  /\bceo\b/,
+  /\bcoo\b/,
+  /\bcfo\b/,
+  /\bcto\b/,
+  /\bcio\b/,
+  /\bcmo\b/,
+  /\bcro\b/,
+  /\bchro\b/,
+  /\bcso\b/,
+  /\bcdo\b/,
+  /\bfounder\b/,
+  /\bco[- ]founder\b/,
+  /\bpresident\b/,
+  /\bvice president\b/,
+  /\bvp\b/,
+  /\bsvp\b/,
+  /\bevp\b/,
+  /\bdirector\b/,
+  /\bhead of\b/,
+  /\bmanaging director\b/,
+  /\bmanaging partner\b/,
+  /\bpartner\b/,
+  /\bprincipal\b/,
+  /\bowner\b/,
+  /\bgeneral manager\b/
+];
+
+function normalizeDepartmentTitle(title?: string): string {
+  return (title || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9&/+ -]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function matchesAnyPattern(value: string, patterns: RegExp[]): boolean {
+  return patterns.some((pattern) => pattern.test(value));
+}
+
+export function inferContactDepartment(title?: string): ContactDepartment {
+  const normalized = normalizeDepartmentTitle(title);
+  if (!normalized) {
+    return "other";
+  }
+
+  if (matchesAnyPattern(normalized, FACILITIES_TITLE_PATTERNS)) {
     return "facilities";
   }
 
-  if (/(people|human resources|hr\b|talent|employee experience)/.test(normalized)) {
+  if (matchesAnyPattern(normalized, HR_PEOPLE_TITLE_PATTERNS)) {
     return "hr_people";
   }
 
-  if (/(workplace|office manager|office operations|experience manager)/.test(normalized)) {
+  if (matchesAnyPattern(normalized, WORKPLACE_TITLE_PATTERNS)) {
     return "workplace";
   }
 
-  if (/(food|beverage|dining|hospitality|culinary|cafeteria)/.test(normalized)) {
+  if (matchesAnyPattern(normalized, FNB_TITLE_PATTERNS)) {
     return "fnb";
   }
 
-  if (/(chief|ceo|coo|cfo|founder|president|vice president|vp\b|director|general manager)/.test(normalized)) {
+  if (matchesAnyPattern(normalized, CSUITE_TITLE_PATTERNS)) {
     return "csuite";
   }
 
   return "other";
+}
+
+export function resolveContactDepartment(
+  department: ContactDepartment | null | undefined,
+  title?: string
+): ContactDepartment {
+  if (department && department !== "other") {
+    return department;
+  }
+
+  return inferContactDepartment(title);
 }
 
 export function personaToApolloTitles(filters: SearchFilters): string[] {

@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import { tavily } from "@tavily/core";
 import { env } from "@/lib/env";
 import type { ContactDepartment, LeadRecord, SavedLocation } from "@/lib/types";
-import { inferContactDepartment } from "@/lib/utils";
+import { resolveContactDepartment } from "@/lib/utils";
 
 export interface AIDiscoveredContact {
   name: string;
@@ -122,10 +122,11 @@ async function extractContactsWithOpenAI(
     if (seenKeys.has(key)) continue;
     seenKeys.add(key);
 
-    const department =
+    const candidateDepartment =
       candidate.department && allowedDepartments.includes(candidate.department as ContactDepartment)
         ? (candidate.department as ContactDepartment)
-        : inferContactDepartment(title);
+        : undefined;
+    const department = resolveContactDepartment(candidateDepartment, title);
 
     contacts.push({
       name,
