@@ -1,5 +1,19 @@
 import { describe, it, expect } from "vitest";
-import { isRealApolloEmail, normalizeDomain } from "@/lib/apollo/normalize";
+import { getPersonName, isRealApolloEmail, normalizeDomain } from "@/lib/apollo/normalize";
+
+describe("getPersonName", () => {
+  it("uses split first and last names when both are present", () => {
+    expect(getPersonName({ first_name: "Jordan", last_name: "Lee", name: "Jordan L." })).toBe("Jordan Lee");
+  });
+
+  it("prefers the fuller name string when split fields are incomplete", () => {
+    expect(getPersonName({ first_name: "Jordan", last_name: "", name: "Jordan Lee" })).toBe("Jordan Lee");
+  });
+
+  it("falls back to the name field when split fields are missing", () => {
+    expect(getPersonName({ name: "Jordan Lee" })).toBe("Jordan Lee");
+  });
+});
 
 describe("isRealApolloEmail", () => {
   it("accepts real addresses", () => {

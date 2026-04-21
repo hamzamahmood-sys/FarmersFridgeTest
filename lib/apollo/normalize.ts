@@ -14,10 +14,22 @@ export function getOrganizationName(person: Record<string, unknown>): string {
 export function getPersonName(person: Record<string, unknown>): string {
   const firstName = typeof person.first_name === "string" ? person.first_name.trim() : "";
   const lastName = typeof person.last_name === "string" ? person.last_name.trim() : "";
+  const fullName = typeof person.name === "string" ? person.name.trim() : "";
   const combined = [firstName, lastName].filter(Boolean).join(" ").trim();
-  if (combined) return combined;
+  if (firstName && lastName) return combined;
 
-  return typeof person.name === "string" ? person.name.trim() : "";
+  // Apollo sometimes omits last_name while still providing a fuller name string.
+  // Prefer that fuller value when the split fields are incomplete.
+  if (fullName) {
+    const splitTokenCount = [firstName, lastName].filter(Boolean).length;
+    const fullTokenCount = fullName.split(/\s+/).filter(Boolean).length;
+
+    if (fullTokenCount > splitTokenCount) {
+      return fullName;
+    }
+  }
+
+  return combined || fullName;
 }
 
 function normalizeKeywords(org: Record<string, unknown>): string[] {
