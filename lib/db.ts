@@ -78,7 +78,9 @@ function rowToLeadRecord(row: Record<string, unknown>): LeadRecord {
       companyDomain: (row.company_domain as string) ?? undefined,
       organizationId: (row.organization_id as string) ?? undefined,
       department: (row.department as LeadRecord["lead"]["department"]) ?? undefined,
-      locationId: (row.location_id as string) ?? undefined
+      locationId: (row.location_id as string) ?? undefined,
+      source: (row.source as LeadRecord["lead"]["source"]) ?? undefined,
+      emailSource: (row.email_source as LeadRecord["lead"]["emailSource"]) ?? undefined
     },
     company: {
       industry: (row.industry as string) ?? undefined,
@@ -180,9 +182,10 @@ export async function cacheLeads(
           `INSERT INTO leads (
             id, name, email, title, linkedin_url, company_name, company_domain, organization_id,
             industry, employee_count, hq_city, hq_state, hq_country, keywords, tech_stack, about,
-            delivery_zone, priority_score, search_query, fetched_at, location_id, department
+            delivery_zone, priority_score, search_query, fetched_at, location_id, department,
+            source, email_source
           ) VALUES (
-            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,NOW(),$20,$21
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,NOW(),$20,$21,$22,$23
           )
           ON CONFLICT (id) DO UPDATE SET
             name = EXCLUDED.name,
@@ -205,7 +208,9 @@ export async function cacheLeads(
             search_query = EXCLUDED.search_query,
             fetched_at = NOW(),
             location_id = COALESCE(EXCLUDED.location_id, leads.location_id),
-            department = COALESCE(EXCLUDED.department, leads.department)`,
+            department = COALESCE(EXCLUDED.department, leads.department),
+            source = COALESCE(EXCLUDED.source, leads.source),
+            email_source = COALESCE(EXCLUDED.email_source, leads.email_source)`,
           [
             record.lead.id,
             record.lead.name,
@@ -227,7 +232,9 @@ export async function cacheLeads(
             record.priorityScore,
             searchQuery,
             locationId,
-            department
+            department,
+            record.lead.source ?? null,
+            record.lead.emailSource ?? null
           ]
         );
       }
@@ -309,6 +316,7 @@ export async function updateLeadContact(
     companyDomain?: string;
     organizationId?: string;
     locationId?: string;
+    emailSource?: "apollo" | "tomba" | "ai" | "existing" | null;
   }
 ): Promise<void> {
   const sets: string[] = [];
@@ -333,6 +341,10 @@ export async function updateLeadContact(
   if (updates.locationId !== undefined) {
     params.push(updates.locationId || null);
     sets.push(`location_id = $${params.length}`);
+  }
+  if (updates.emailSource !== undefined) {
+    params.push(updates.emailSource || null);
+    sets.push(`email_source = $${params.length}`);
   }
 
   if (sets.length === 0) return;

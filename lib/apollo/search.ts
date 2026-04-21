@@ -490,11 +490,12 @@ export async function searchLeads(filters: SearchFilters): Promise<LeadRecord[]>
 
       const company = extractCompanyFromPerson(person);
 
+      const apolloEmail = isRealApolloEmail(person.email) ? (person.email as string) : "";
       const record: LeadRecord = {
         lead: {
           id: typeof person.id === "string" ? person.id : `lead-${index}`,
           name: getPersonName(person) || "Unknown Contact",
-          email: isRealApolloEmail(person.email) ? (person.email as string) : "",
+          email: apolloEmail,
           title: typeof person.title === "string" ? person.title : "Unknown Title",
           linkedinUrl:
             typeof person.linkedin_url === "string"
@@ -514,7 +515,9 @@ export async function searchLeads(filters: SearchFilters): Promise<LeadRecord[]>
             typeof person.organization_website_url === "string"
               ? person.organization_website_url
               : organizationPrimaryDomain,
-          organizationId: typeof person.organization_id === "string" ? person.organization_id : undefined
+          organizationId: typeof person.organization_id === "string" ? person.organization_id : undefined,
+          source: "apollo",
+          emailSource: apolloEmail ? "apollo" : undefined
         },
         company,
         priorityScore: 0

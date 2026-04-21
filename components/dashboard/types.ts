@@ -65,7 +65,7 @@ export type ResearchState = {
 };
 
 export type EmailLookupState = "idle" | "looking" | "found" | "not_found";
-export type EmailSource = "existing" | "apollo" | "tomba" | "none";
+export type EmailSource = "existing" | "apollo" | "tomba" | "ai" | "none";
 export type NavPage = "dashboard" | "contacts" | "emails" | "tone";
 export type SearchMode = "search" | "bulk";
 export type EmailFilter = "all" | "generated" | "approved" | "sent";

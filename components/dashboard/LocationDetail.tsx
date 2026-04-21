@@ -47,8 +47,11 @@ type Props = {
   setPageError: (msg: string | null) => void;
   setPageSuccess: (msg: string | null) => void;
   onBack: () => void;
-  onLoadContacts: (options?: { limit?: number }) => Promise<void>;
-  onLoadMore: () => Promise<void>;
+  onLoadContacts: (options?: {
+    limit?: number;
+    personas?: Array<"office_manager" | "facilities_director" | "workplace_experience" | "hr" | "csuite" | "custom">;
+    customPersona?: string;
+  }) => Promise<void>;
   onDiscoverWithAI: () => Promise<void>;
   onUpdateField: (field: "pipelineStage" | "locationType" | "pitchType", value: string) => Promise<void>;
   onSaveNotes: (notes: string) => Promise<void>;
@@ -66,7 +69,6 @@ export function LocationDetail({
   setPageSuccess,
   onBack,
   onLoadContacts,
-  onLoadMore,
   onDiscoverWithAI,
   onUpdateField,
   onSaveNotes,
@@ -80,6 +82,9 @@ export function LocationDetail({
   const [notesDraft, setNotesDraft] = useState(currentLocation.notes || "");
   const [contactSearch, setContactSearch] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState<DepartmentFilter>("all");
+  const [searchPersona, setSearchPersona] = useState<
+    "all" | "facilities" | "workplace" | "hr" | "fnb" | "csuite"
+  >("all");
   const [researchByLeadId, setResearchByLeadId] = useState<Record<string, ResearchState>>({});
   const [expandedLeadId, setExpandedLeadId] = useState<string | null>(null);
   const [emailLookupLeadId, setEmailLookupLeadId] = useState<string | null>(null);
@@ -153,6 +158,71 @@ export function LocationDetail({
     if (lookupState === "looking") return "Looking up...";
     if (lookupState === "not_found") return "No email found";
     return "Not looked up yet";
+  }
+
+  function getEmailSourceLabel(record: LeadRecord): {
+    source: EmailSource;
+    label: string;
+  } | null {
+    if (!record.lead.email) return null;
+    const runtime = emailSourceByLeadId[record.lead.id];
+    const persisted = record.lead.emailSource;
+    const source: EmailSource = (runtime ?? persisted ?? "existing") as EmailSource;
+    switch (source) {
+      case "apollo":
+        return { source, label: "via Apollo" };
+      case "tomba":
+        return { source, label: "via Tomba" };
+      case "ai":
+        return { source, label: "via AI" };
+      case "existing":
+        return { source, label: "on file" };
+      default:
+        return null;
+    }
+  }
+
+  function getContactSourceBadge(record: LeadRecord): { label: string; className: string } {
+    if (record.lead.source === "ai") {
+      return { label: "AI", className: "contactSourceBadge contactSourceBadge--ai" };
+    }
+    return { label: "Apollo", className: "contactSourceBadge contactSourceBadge--apollo" };
+  }
+
+  type PersonaOption = NonNullable<Parameters<Props["onLoadContacts"]>[0]>["personas"];
+  function resolvePersonasForSearch(): { personas: PersonaOption; customPersona?: string } {
+    switch (searchPersona) {
+      case "facilities":
+        return { personas: ["facilities_director"] };
+      case "workplace":
+        return { personas: ["office_manager", "workplace_experience"] };
+      case "hr":
+        return { personas: ["hr"] };
+      case "csuite":
+        return { personas: ["csuite"] };
+      case "fnb":
+        return { personas: ["custom"], customPersona: "Director of Food Services" };
+      case "all":
+      default:
+        return {
+          personas: [
+            "office_manager",
+            "facilities_director",
+            "workplace_experience",
+            "hr",
+            "csuite"
+          ]
+        };
+    }
+  }
+
+  async function runContactSearch(options?: { limit?: number }) {
+    const { personas, customPersona } = resolvePersonasForSearch();
+    await onLoadContacts({
+      ...options,
+      personas,
+      customPersona
+    });
   }
 
   async function ensureLeadEmail(record: LeadRecord): Promise<LeadRecord | null> {
@@ -639,10 +709,25 @@ export function LocationDetail({
               onChange={(event) => setContactSearch(event.target.value)}
               placeholder="Filter by name, email, title, or department..."
             />
+            <label className="inlineSelect">
+              <span>Search roles</span>
+              <select
+                value={searchPersona}
+                onChange={(event) => setSearchPersona(event.target.value as typeof searchPersona)}
+                disabled={loadingLocationId === currentLocation.id}
+              >
+                <option value="all">All roles</option>
+                <option value="facilities">Facilities</option>
+                <option value="workplace">Workplace / Office Ops</option>
+                <option value="hr">HR & People</option>
+                <option value="fnb">F&amp;B / Dining</option>
+                <option value="csuite">C-Suite</option>
+              </select>
+            </label>
             <button
               className="secondaryButton"
               type="button"
-              onClick={() => void onLoadContacts()}
+              onClick={() => void runContactSearch()}
               disabled={loadingLocationId === currentLocation.id}
             >
               <RefreshCw size={15} />
@@ -652,7 +737,9 @@ export function LocationDetail({
               <button
                 className="secondaryButton"
                 type="button"
-                onClick={() => void onLoadMore()}
+                onClick={() =>
+                  void runContactSearch({ limit: currentContactSearchLimit + nextContactSearchIncrement })
+                }
                 disabled={loadingLocationId === currentLocation.id || nextContactSearchIncrement === 0}
               >
                 <Plus size={15} />
@@ -730,7 +817,13 @@ export function LocationDetail({
                   <div className="tableRow contactTableRow">
                     <div className="cell primaryCell">
                       <div className="nameBlock">
-                        <strong>{record.lead.name}</strong>
+                        <div className="nameBlockHeader">
+                          <strong>{record.lead.name}</strong>
+                          {(() => {
+                            const badge = getContactSourceBadge(record);
+                            return <span className={badge.className}>{badge.label}</span>;
+                          })()}
+                        </div>
                         <span>{record.lead.companyName}</span>
                         {research?.researchedAt ? (
                           <span className="researchedBadge">
@@ -741,15 +834,13 @@ export function LocationDetail({
                     </div>
                     <div className="cell mono">
                       {getEmailDisplay(record)}
-                      {record.lead.email && emailSourceByLeadId[record.lead.id] ? (
-                        <span className={`sourceBadge sourceBadge--${emailSourceByLeadId[record.lead.id]}`}>
-                          {emailSourceByLeadId[record.lead.id] === "apollo"
-                            ? "via Apollo"
-                            : emailSourceByLeadId[record.lead.id] === "tomba"
-                              ? "via Tomba"
-                              : "existing"}
-                        </span>
-                      ) : null}
+                      {(() => {
+                        const info = getEmailSourceLabel(record);
+                        if (!info) return null;
+                        return (
+                          <span className={`sourceBadge sourceBadge--${info.source}`}>{info.label}</span>
+                        );
+                      })()}
                     </div>
                     <div className="cell">{record.lead.title}</div>
                     <div className="cell">

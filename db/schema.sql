@@ -122,6 +122,10 @@ CREATE INDEX IF NOT EXISTS saved_locations_updated_idx  ON saved_locations (upda
 -- Add location_id on leads so contacts can be grouped under a saved location.
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS location_id TEXT REFERENCES saved_locations(id) ON DELETE SET NULL;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS department   TEXT;
+-- Provenance: where the contact record itself came from (apollo | ai). Nullable for legacy rows.
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS source        TEXT;
+-- Provenance: where the email address was sourced (apollo | tomba | ai | existing). Nullable.
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS email_source  TEXT;
 CREATE INDEX IF NOT EXISTS leads_location_id_idx ON leads (location_id);
 
 -- ─── Emails (persisted drafts / sent) ─────────────────────────────────────────

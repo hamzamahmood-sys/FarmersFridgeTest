@@ -27,7 +27,11 @@ const leadSchema = z.object({
   linkedinUrl: z.string().optional(),
   companyName: z.string(),
   companyDomain: z.string().optional(),
-  organizationId: z.string().optional()
+  organizationId: z.string().optional(),
+  department: z.enum(["facilities", "hr_people", "workplace", "fnb", "csuite", "other"]).optional(),
+  locationId: z.string().optional(),
+  source: z.enum(["apollo", "ai"]).optional(),
+  emailSource: z.enum(["apollo", "tomba", "ai", "existing"]).optional()
 });
 
 const payloadSchema = z.object({
@@ -112,11 +116,25 @@ export async function POST(request: Request) {
       providerNotes.push("Apollo returned no email and we couldn't resolve a company domain, so Tomba was skipped.");
     }
 
+    const resolvedEmailSource: "apollo" | "tomba" | undefined = leadRecord.lead.email
+      ? source === "tomba"
+        ? "tomba"
+        : "apollo"
+      : undefined;
+
+    if (resolvedEmailSource) {
+      leadRecord = {
+        ...leadRecord,
+        lead: { ...leadRecord.lead, emailSource: resolvedEmailSource }
+      };
+    }
+
     await updateLeadContact(leadRecord.lead.id, {
       email: leadRecord.lead.email || undefined,
       linkedinUrl: leadRecord.lead.linkedinUrl,
       companyDomain: leadRecord.lead.companyDomain,
-      organizationId: leadRecord.lead.organizationId
+      organizationId: leadRecord.lead.organizationId,
+      emailSource: resolvedEmailSource
     });
 
     return NextResponse.json({

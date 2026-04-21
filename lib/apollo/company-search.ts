@@ -530,11 +530,12 @@ export async function searchLeadsForCompany(
       about: mappedCompany.about || company.company.about
     };
 
+    const apolloEmail = isRealApolloEmail(person.email) ? (person.email as string) : "";
     const record: LeadRecord = {
       lead: {
         id: typeof person.id === "string" || typeof person.id === "number" ? String(person.id) : `lead-${index}`,
         name: getPersonName(person) || "Unknown Contact",
-        email: isRealApolloEmail(person.email) ? (person.email as string) : "",
+        email: apolloEmail,
         title: typeof person.title === "string" ? person.title : "Unknown Title",
         linkedinUrl:
           typeof person.linkedin_url === "string"
@@ -550,7 +551,9 @@ export async function searchLeadsForCompany(
           typeof person.organization_website_url === "string"
             ? normalizeDomain(person.organization_website_url)
             : normalizeDomain(organizationPrimaryDomain) || company.domain,
-        organizationId: company.id
+        organizationId: company.id,
+        source: "apollo",
+        emailSource: apolloEmail ? "apollo" : undefined
       },
       company: finalCompany,
       priorityScore: scoreCompanyFit(finalCompany)

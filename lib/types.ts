@@ -11,6 +11,9 @@ export interface SearchFilters {
   limit: number;
 }
 
+export type ContactSource = "apollo" | "ai";
+export type EmailSource = "apollo" | "tomba" | "ai" | "existing";
+
 export interface Lead {
   id: string;
   name: string;
@@ -22,6 +25,10 @@ export interface Lead {
   organizationId?: string;
   department?: ContactDepartment;
   locationId?: string;
+  /** Where this contact record originated. Undefined = legacy Apollo. */
+  source?: ContactSource;
+  /** Where the email address came from (only meaningful when email is non-empty). */
+  emailSource?: EmailSource;
 }
 
 export interface CompanyFirmographics {

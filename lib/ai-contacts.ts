@@ -159,7 +159,9 @@ export async function discoverContactsWithAI(location: SavedLocation): Promise<L
       companyDomain: location.companyDomain,
       organizationId: location.organizationId,
       department: contact.department,
-      locationId: location.id
+      locationId: location.id,
+      source: "ai",
+      emailSource: contact.email ? "ai" : undefined
     },
     company: {
       industry: location.industry,

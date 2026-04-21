@@ -13,6 +13,7 @@ import type {
   ProspectCompany,
   SavedLocation,
   SavedLocationSummary,
+  SearchFilters,
   StoredEmail,
   ToneSettings
 } from "./dashboard/types";
@@ -219,7 +220,11 @@ export function OutreachDashboard() {
 
   async function loadContactsForLocation(
     locationArg?: SavedLocation,
-    options?: { limit?: number }
+    options?: {
+      limit?: number;
+      personas?: SearchFilters["personas"];
+      customPersona?: string;
+    }
   ) {
     const location = locationArg || currentLocation;
     if (!location) return;
@@ -227,6 +232,15 @@ export function OutreachDashboard() {
 
     const requestedLimit = clampContactSearchLimit(options?.limit ?? getContactSearchLimit(location));
     const preservedEmails = currentLocation?.id === location.id ? (locationDetail?.emails ?? []) : [];
+
+    const defaultPersonas: SearchFilters["personas"] = [
+      "office_manager",
+      "facilities_director",
+      "workplace_experience",
+      "hr",
+      "csuite"
+    ];
+    const personas = options?.personas && options.personas.length > 0 ? options.personas : defaultPersonas;
 
     contactLoadInFlightRef.current = true;
     setLoadingLocationId(location.id);
@@ -238,7 +252,14 @@ export function OutreachDashboard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           company: locationToProspectCompany(location),
-          filters: { personas: ["office_manager", "facilities_director", "workplace_experience", "hr", "csuite"], industryQuery: location.companyName, states: [], employeeMin: 50, limit: requestedLimit },
+          filters: {
+            personas,
+            customPersona: options?.customPersona,
+            industryQuery: location.companyName,
+            states: [],
+            employeeMin: 50,
+            limit: requestedLimit
+          },
           searchQuery: location.companyName,
           locationId: isPreviewLocationId(location.id) ? undefined : location.id
         })
@@ -311,17 +332,6 @@ export function OutreachDashboard() {
     } finally {
       setLoadingLocationId(null);
     }
-  }
-
-  async function loadMoreContactsForLocation() {
-    if (!currentLocation) return;
-    const nextLimit = clampContactSearchLimit(currentContactSearchLimit + CONTACT_SEARCH_INCREMENT);
-    if (nextLimit === currentContactSearchLimit) {
-      setPageSuccess(`You're already searching up to ${MAX_CONTACT_SEARCH_LIMIT} contacts for this company.`);
-      return;
-    }
-    setPageSuccess(null);
-    await loadContactsForLocation(currentLocation, { limit: nextLimit });
   }
 
   async function deleteLocation(locationId: string) {
@@ -449,7 +459,6 @@ export function OutreachDashboard() {
                 setLocationDetail(null);
               }}
               onLoadContacts={(options) => loadContactsForLocation(undefined, options)}
-              onLoadMore={loadMoreContactsForLocation}
               onDiscoverWithAI={discoverContactsWithAI}
               onUpdateField={updateCurrentLocationField}
               onSaveNotes={saveLocationNotes}

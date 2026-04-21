@@ -757,6 +757,43 @@ textarea {
   border: 1px solid var(--ff-line);
 }
 
+.sourceBadge--ai {
+  background: #ece5fb;
+  color: #4a2c9a;
+  border: 1px solid #c9b8f5;
+}
+
+.nameBlockHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.contactSourceBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-family: var(--ff-font-sans);
+}
+
+.contactSourceBadge--apollo {
+  background: var(--ff-mint);
+  color: var(--ff-green-deep);
+  border: 1px solid var(--ff-mint-deep);
+}
+
+.contactSourceBadge--ai {
+  background: #ece5fb;
+  color: #4a2c9a;
+  border: 1px solid #c9b8f5;
+}
+
 .researchedBadge {
   display: inline-flex;
   align-items: center;
@@ -2053,6 +2090,39 @@ textarea {
 
 .detailSelect--pitch {
   margin-left: auto;
+}
+
+.inlineSelect {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--ff-ink-soft);
+}
+
+.inlineSelect span {
+  color: var(--ff-green);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.64rem;
+  font-weight: 700;
+}
+
+.inlineSelect select {
+  padding: 6px 10px;
+  border: 1px solid var(--ff-line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ff-ink);
+  font-size: 0.78rem;
+  font-family: var(--ff-font-sans);
+  cursor: pointer;
+}
+
+.inlineSelect select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .detailGrid {
