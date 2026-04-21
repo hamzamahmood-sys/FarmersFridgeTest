@@ -1417,6 +1417,7 @@ textarea {
    ========================================================================== */
 
 .sequenceReadyBadge,
+.sequenceErrorBadge,
 .sequenceLoadingBadge {
   display: inline-flex;
   align-items: center;
@@ -1434,6 +1435,12 @@ textarea {
   background: var(--ff-mint);
   color: var(--ff-green-deep);
   border: 1px solid var(--ff-mint-deep);
+}
+
+.sequenceErrorBadge {
+  background: rgba(192, 74, 42, 0.1);
+  color: #8d3518;
+  border: 1px solid rgba(192, 74, 42, 0.18);
 }
 
 .sequenceLoadingBadge {

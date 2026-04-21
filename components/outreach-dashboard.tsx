@@ -87,6 +87,8 @@ type ResearchState = {
   talkingPoints: string;
   followUp1?: FollowUpDraft;
   followUp2?: FollowUpDraft;
+  sequenceStatus?: "idle" | "generating" | "ready" | "error";
+  sequenceError?: string;
   researchedAt?: string;
 };
 
@@ -802,13 +804,27 @@ export function OutreachDashboard() {
           ...current,
           [record.lead.id]: {
             ...existing,
+            sequenceStatus: "ready",
+            sequenceError: undefined,
             ...next
           }
         };
       });
 
       return next;
-    } catch {
+    } catch (error) {
+      setResearchByLeadId((current) => {
+        const existing = current[record.lead.id];
+        if (!existing) return current;
+        return {
+          ...current,
+          [record.lead.id]: {
+            ...existing,
+            sequenceStatus: "error",
+            sequenceError: error instanceof Error ? error.message : "Follow-up draft generation failed."
+          }
+        };
+      });
       return null;
     }
   }
@@ -825,6 +841,10 @@ export function OutreachDashboard() {
         status: "researched",
         pitch,
         talkingPoints: pitch.talkingPoints,
+        sequenceStatus: "generating",
+        sequenceError: undefined,
+        followUp1: undefined,
+        followUp2: undefined,
         researchedAt: new Date().toISOString()
       };
 
@@ -857,6 +877,10 @@ export function OutreachDashboard() {
             status: "researched",
             pitch,
             talkingPoints: pitch.talkingPoints,
+            sequenceStatus: "generating",
+            sequenceError: undefined,
+            followUp1: undefined,
+            followUp2: undefined,
             researchedAt: new Date().toISOString()
           }
         }));
@@ -894,6 +918,10 @@ export function OutreachDashboard() {
             status: "researched",
             pitch,
             talkingPoints: pitch.talkingPoints,
+            sequenceStatus: "generating",
+            sequenceError: undefined,
+            followUp1: undefined,
+            followUp2: undefined,
             researchedAt: new Date().toISOString()
           }
         }));
@@ -1980,10 +2008,14 @@ export function OutreachDashboard() {
                                   <li key={item}>{item}</li>
                                 ))}
                               </ul>
-                              {research.followUp1 && research.followUp2 ? (
-                                <div className="sequenceReadyBadge">3-email sequence ready</div>
+                              {research.sequenceStatus === "ready" && research.followUp1 && research.followUp2 ? (
+                                <div className="sequenceReadyBadge">
+                                  {isPreviewLocation ? "Follow-up drafts ready (preview only)" : "Follow-up drafts ready"}
+                                </div>
+                              ) : research.sequenceStatus === "error" ? (
+                                <div className="sequenceErrorBadge">Follow-up drafts failed</div>
                               ) : (
-                                <div className="sequenceLoadingBadge">Generating sequence...</div>
+                                <div className="sequenceLoadingBadge">Preparing follow-up copy...</div>
                               )}
                             </div>
                             <div className="researchFooter">
@@ -1991,6 +2023,14 @@ export function OutreachDashboard() {
                                 <span>Bridge insight: {research.pitch.bridgeInsight}</span>
                                 <span>Specificity anchors: {research.pitch.variableEvidence.join(", ") || "None detected"}</span>
                                 <span>Contact email: {getEmailDisplay(record)}</span>
+                                <span>
+                                  {isPreviewLocation
+                                    ? "Preview mode: research can prepare follow-up copy, but emails cannot be saved yet."
+                                    : "Research prepares the copy. Click Queue Sequence to save emails into the Emails page."}
+                                </span>
+                                {research.sequenceStatus === "error" && research.sequenceError ? (
+                                  <span>Follow-up status: {research.sequenceError}</span>
+                                ) : null}
                               </div>
                               <div className="inlineActions">
                                 <button className="secondaryButton" type="button" onClick={() => void researchLead(record, research.talkingPoints)}>

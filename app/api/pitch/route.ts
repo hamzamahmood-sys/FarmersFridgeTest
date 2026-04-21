@@ -76,8 +76,11 @@ export async function POST(request: Request) {
       toneSettings
     );
 
-    // Persist in background
-    void cachePitch(leadId, pitch);
+    // Only cache the primary email draft. Follow-up drafts are generated on demand
+    // and should not overwrite the main step-1 pitch for this lead.
+    if (payload.step === 1) {
+      void cachePitch(leadId, pitch);
+    }
 
     return NextResponse.json({ pitch, fromCache: false });
   } catch (error) {
