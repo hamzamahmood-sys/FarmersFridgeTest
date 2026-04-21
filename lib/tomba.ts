@@ -47,7 +47,11 @@ export function isTombaConfigured(): boolean {
 export async function findEmailTomba(
   firstName: string,
   lastName: string,
-  domain: string
+  domain: string,
+  options?: {
+    companyName?: string;
+    fullName?: string;
+  }
 ): Promise<string | null> {
   const credentials = getTombaCredentials();
   if (!credentials) return null;
@@ -59,6 +63,12 @@ export async function findEmailTomba(
     url.searchParams.set("domain", normalizedDomain);
     url.searchParams.set("first_name", firstName);
     url.searchParams.set("last_name", lastName);
+    if (options?.fullName?.trim()) {
+      url.searchParams.set("full_name", options.fullName.trim());
+    }
+    if (options?.companyName?.trim()) {
+      url.searchParams.set("company", options.companyName.trim());
+    }
 
     const response = await fetch(url.toString(), {
       headers: {

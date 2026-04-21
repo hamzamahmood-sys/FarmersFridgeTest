@@ -11,6 +11,7 @@ import {
   RefreshCw,
   Sparkles
 } from "lucide-react";
+import { isRealApolloEmail } from "@/lib/apollo/normalize";
 import { MAX_CONTACT_SEARCH_LIMIT } from "@/lib/constants";
 import { isLowSignalPitch } from "@/lib/utils";
 import type {
@@ -109,7 +110,7 @@ export function LocationDetail({
   const visibleContacts = useMemo(() => {
     return currentContacts.filter((record) => {
       const matchesQuery = contactSearch.trim()
-        ? [record.lead.name, record.lead.email, record.lead.title, record.lead.companyName, record.lead.department]
+        ? [record.lead.name, getResolvedEmailValue(record), record.lead.title, record.lead.companyName, record.lead.department]
             .filter(Boolean)
             .join(" ")
             .toLowerCase()
@@ -152,8 +153,13 @@ export function LocationDetail({
     void nextRecord;
   }
 
+  function getResolvedEmailValue(record: LeadRecord): string {
+    return isRealApolloEmail(record.lead.email) ? record.lead.email : "";
+  }
+
   function getEmailDisplay(record: LeadRecord): string {
-    if (record.lead.email) return record.lead.email;
+    const resolvedEmail = getResolvedEmailValue(record);
+    if (resolvedEmail) return resolvedEmail;
     const lookupState = emailLookupStateByLeadId[record.lead.id] || "idle";
     if (lookupState === "looking") return "Looking up...";
     if (lookupState === "not_found") return "No email found";
@@ -164,7 +170,7 @@ export function LocationDetail({
     source: EmailSource;
     label: string;
   } | null {
-    if (!record.lead.email) return null;
+    if (!getResolvedEmailValue(record)) return null;
     const runtime = emailSourceByLeadId[record.lead.id];
     const persisted = record.lead.emailSource;
     const source: EmailSource = (runtime ?? persisted ?? "existing") as EmailSource;
@@ -226,7 +232,7 @@ export function LocationDetail({
   }
 
   async function ensureLeadEmail(record: LeadRecord): Promise<LeadRecord | null> {
-    if (record.lead.email) {
+    if (getResolvedEmailValue(record)) {
       setEmailLookupStateByLeadId((current) => ({ ...current, [record.lead.id]: "found" }));
       setEmailSourceByLeadId((current) =>
         current[record.lead.id] ? current : { ...current, [record.lead.id]: "existing" }
@@ -459,13 +465,15 @@ export function LocationDetail({
     startDraftTransition(async () => {
       try {
         let draftRecord = record;
-        if (!draftRecord.lead.email) {
+        if (!getResolvedEmailValue(draftRecord)) {
           const enrichedRecord = await ensureLeadEmail(draftRecord);
-          if (!enrichedRecord?.lead.email) {
+          if (!enrichedRecord || !getResolvedEmailValue(enrichedRecord)) {
             throw new Error("We still don't have an email for this contact, so the sequence can't be queued yet.");
           }
           draftRecord = enrichedRecord;
         }
+
+        const contactEmail = getResolvedEmailValue(draftRecord);
 
         const research = await ensureLeadResearch(draftRecord);
         if (!research) throw new Error("Research is required before queuing the sequence.");
@@ -487,7 +495,7 @@ export function LocationDetail({
           {
             locationId: currentLocation.id,
             contactName: draftRecord.lead.name,
-            contactEmail: draftRecord.lead.email,
+            contactEmail,
             contactTitle: draftRecord.lead.title,
             companyName: draftRecord.lead.companyName,
             locationType: currentLocation.locationType,
@@ -499,7 +507,7 @@ export function LocationDetail({
           {
             locationId: currentLocation.id,
             contactName: draftRecord.lead.name,
-            contactEmail: draftRecord.lead.email,
+            contactEmail,
             contactTitle: draftRecord.lead.title,
             companyName: draftRecord.lead.companyName,
             locationType: currentLocation.locationType,
@@ -511,7 +519,7 @@ export function LocationDetail({
           {
             locationId: currentLocation.id,
             contactName: draftRecord.lead.name,
-            contactEmail: draftRecord.lead.email,
+            contactEmail,
             contactTitle: draftRecord.lead.title,
             companyName: draftRecord.lead.companyName,
             locationType: currentLocation.locationType,

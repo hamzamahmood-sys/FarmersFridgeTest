@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { z, ZodError } from "zod";
 import { enrichLeadContactFromApollo } from "@/lib/apollo";
+import { isRealApolloEmail } from "@/lib/apollo/normalize";
 import { updateLeadContact } from "@/lib/db";
 import { resolveCompanyDomain } from "@/lib/tavily";
 import { findEmailTomba, isTombaConfigured } from "@/lib/tomba";
@@ -61,6 +62,7 @@ export async function POST(request: Request) {
     const apolloResult = await enrichLeadContactFromApollo(payload.leadRecord);
     let leadRecord = apolloResult.leadRecord;
     let source = apolloResult.source;
+    let hasResolvedEmail = isRealApolloEmail(leadRecord.lead.email);
     const providersTried = ["apollo"];
     const providerNotes: string[] = [];
     const tombaConfigured = isTombaConfigured();
@@ -75,7 +77,17 @@ export async function POST(request: Request) {
       tombaConfigured
     });
 
-    if (!leadRecord.lead.email && !leadRecord.lead.companyDomain) {
+    if (!hasResolvedEmail && leadRecord.lead.email) {
+      leadRecord = {
+        ...leadRecord,
+        lead: {
+          ...leadRecord.lead,
+          email: ""
+        }
+      };
+    }
+
+    if (!hasResolvedEmail && !leadRecord.lead.companyDomain) {
       const resolvedDomain = await resolveCompanyDomain(leadRecord);
       if (resolvedDomain) {
         providersTried.push("domain_lookup");
@@ -89,14 +101,17 @@ export async function POST(request: Request) {
       }
     }
 
-    if (!leadRecord.lead.email && leadRecord.lead.companyDomain) {
+    if (!hasResolvedEmail && leadRecord.lead.companyDomain) {
       const { firstName, lastName } = splitFullName(leadRecord.lead.name);
 
       if (!tombaConfigured) {
-        providerNotes.push("Apollo returned no email for this contact.");
+        providerNotes.push("Apollo returned no email and Tomba fallback is not configured on the server.");
       } else if (firstName) {
         providersTried.push("tomba");
-        const tombaEmail = await findEmailTomba(firstName, lastName, leadRecord.lead.companyDomain);
+        const tombaEmail = await findEmailTomba(firstName, lastName, leadRecord.lead.companyDomain, {
+          companyName: leadRecord.lead.companyName,
+          fullName: leadRecord.lead.name
+        });
         if (tombaEmail) {
           leadRecord = {
             ...leadRecord,
@@ -106,20 +121,23 @@ export async function POST(request: Request) {
             }
           };
           source = "tomba";
+          hasResolvedEmail = true;
         } else {
           providerNotes.push("Apollo returned no email and Tomba did not find one for the company domain.");
         }
       } else {
         providerNotes.push("Apollo returned no email and the contact name was incomplete, so Tomba was skipped.");
       }
-    } else if (!leadRecord.lead.email) {
+    } else if (!hasResolvedEmail) {
       providerNotes.push("Apollo returned no email and we couldn't resolve a company domain, so Tomba was skipped.");
     }
 
-    const resolvedEmailSource: "apollo" | "tomba" | undefined = leadRecord.lead.email
+    const resolvedEmailSource: "apollo" | "tomba" | "existing" | undefined = hasResolvedEmail
       ? source === "tomba"
         ? "tomba"
-        : "apollo"
+        : source === "existing"
+          ? "existing"
+          : "apollo"
       : undefined;
 
     if (resolvedEmailSource) {
@@ -130,7 +148,7 @@ export async function POST(request: Request) {
     }
 
     await updateLeadContact(leadRecord.lead.id, {
-      email: leadRecord.lead.email || undefined,
+      email: hasResolvedEmail ? leadRecord.lead.email : undefined,
       linkedinUrl: leadRecord.lead.linkedinUrl,
       companyDomain: leadRecord.lead.companyDomain,
       organizationId: leadRecord.lead.organizationId,
@@ -140,7 +158,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       leadRecord,
       source,
-      emailFound: Boolean(leadRecord.lead.email),
+      emailFound: hasResolvedEmail,
       emailStatus: apolloResult.emailStatus,
       providersTried,
       providerNotes

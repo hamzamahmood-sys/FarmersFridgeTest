@@ -13,7 +13,9 @@ export type LeadEmailEnrichmentResult = {
 };
 
 export async function enrichLeadContactFromApollo(record: LeadRecord): Promise<LeadEmailEnrichmentResult> {
-  if (isRealApolloEmail(record.lead.email)) {
+  const existingEmail = isRealApolloEmail(record.lead.email) ? record.lead.email : "";
+
+  if (existingEmail) {
     return { leadRecord: record, source: "existing" };
   }
 
@@ -60,7 +62,7 @@ export async function enrichLeadContactFromApollo(record: LeadRecord): Promise<L
     lead: {
       ...record.lead,
       name: getPersonName(person || {}) || record.lead.name,
-      email: apolloEmail || record.lead.email,
+      email: apolloEmail || existingEmail,
       linkedinUrl,
       companyDomain,
       organizationId
