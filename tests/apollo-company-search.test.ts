@@ -160,6 +160,63 @@ describe("company-first Apollo search", () => {
     ).toBe(true);
   });
 
+  it("enriches top contacts with full names and revealed emails when people/match succeeds", async () => {
+    mockApolloFetch.mockImplementation(async (path, body) => {
+      const params = body as Record<string, unknown>;
+
+      if (path === "/v1/mixed_people/api_search") {
+        return {
+          people: [
+            {
+              id: "person-2",
+              first_name: "Joe",
+              title: "Division President",
+              has_email: true,
+              organization_id: "org-1",
+              organization_name: "Hudson Legal Group",
+              organization: {
+                name: "Hudson Legal Group",
+                primary_domain: "hudsonlegal.com",
+                industry: "Law Practice",
+                estimated_num_employees: 450,
+                city: "New York",
+                state: "New York",
+                country: "United States",
+                keywords: ["law"]
+              }
+            }
+          ]
+        };
+      }
+
+      if (path === "/v1/people/match" && params.id === "person-2") {
+        return {
+          person: {
+            id: "person-2",
+            first_name: "Joe",
+            last_name: "Benti",
+            name: "Joe Benti",
+            email: "joe@hudsonlegal.com",
+            title: "Division President",
+            organization_id: "org-1",
+            organization: {
+              website_url: "https://hudsonlegal.com"
+            }
+          }
+        };
+      }
+
+      return { people: [] };
+    });
+
+    const leads = await searchLeadsForCompany(marketFilters, selectedCompany);
+
+    expect(leads).toHaveLength(1);
+    expect(leads[0]?.lead.name).toBe("Joe Benti");
+    expect(leads[0]?.lead.email).toBe("joe@hudsonlegal.com");
+    expect(leads[0]?.lead.emailSource).toBe("apollo");
+  });
+
   it("tries a compact company-name variant for exact company searches", async () => {
     mockApolloFetch.mockImplementation(async (_path, body) => {
       const params = body as Record<string, unknown>;

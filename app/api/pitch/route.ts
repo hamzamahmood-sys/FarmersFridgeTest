@@ -44,7 +44,7 @@ const payloadSchema = z.object({
 });
 
 export async function POST(request: Request) {
-  const { allowed, retryAfterMs } = checkRateLimit(getRateLimitKey(request, "pitch"), 20, 60_000);
+  const { allowed, retryAfterMs } = checkRateLimit(getRateLimitKey(request, "pitch"), 60, 60_000);
   if (!allowed) {
     return NextResponse.json(
       { error: "Too many requests. Please wait a moment before trying again." },

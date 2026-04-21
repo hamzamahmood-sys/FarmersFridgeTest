@@ -91,6 +91,7 @@ export function LocationDetail({
   const [emailLookupLeadId, setEmailLookupLeadId] = useState<string | null>(null);
   const [emailLookupStateByLeadId, setEmailLookupStateByLeadId] = useState<Record<string, EmailLookupState>>({});
   const [emailSourceByLeadId, setEmailSourceByLeadId] = useState<Record<string, EmailSource>>({});
+  const [resolvedLeadById, setResolvedLeadById] = useState<Record<string, Partial<LeadRecord["lead"]>>>({});
   const [bulkResearchProgress, setBulkResearchProgress] = useState<{
     total: number;
     completed: number;
@@ -109,17 +110,18 @@ export function LocationDetail({
 
   const visibleContacts = useMemo(() => {
     return currentContacts.filter((record) => {
+      const lead = getResolvedLead(record);
       const matchesQuery = contactSearch.trim()
-        ? [record.lead.name, getResolvedEmailValue(record), record.lead.title, record.lead.companyName, record.lead.department]
+        ? [lead.name, getResolvedEmailValue(record), lead.title, lead.companyName, lead.department]
             .filter(Boolean)
             .join(" ")
             .toLowerCase()
             .includes(contactSearch.trim().toLowerCase())
         : true;
-      const matchesDepartment = departmentFilter === "all" || record.lead.department === departmentFilter;
+      const matchesDepartment = departmentFilter === "all" || lead.department === departmentFilter;
       return matchesQuery && matchesDepartment;
     });
-  }, [contactSearch, currentContacts, departmentFilter]);
+  }, [contactSearch, currentContacts, departmentFilter, resolvedLeadById]);
 
   const contactCountsByDepartment = useMemo(() => {
     return currentContacts.reduce<Record<Exclude<DepartmentFilter, "all">, number>>(
@@ -166,17 +168,29 @@ export function LocationDetail({
   ]);
 
   function replaceLeadRecord(nextRecord: LeadRecord) {
-    // No-op: contact enrichment (email lookup) updates the lead's email in place.
-    // The contacts array lives in the parent's locationDetail, but for display purposes
-    // we track email lookup state separately (emailLookupStateByLeadId / emailSourceByLeadId).
-    // When email lookup succeeds, the enriched record is returned from ensureLeadEmail
-    // and used directly for pitch/draft calls — we don't need to push it back to the parent
-    // since the parent's contacts array is only refreshed on explicit "Refresh Contacts".
-    void nextRecord;
+    setResolvedLeadById((current) => ({
+      ...current,
+      [nextRecord.lead.id]: {
+        ...current[nextRecord.lead.id],
+        ...nextRecord.lead
+      }
+    }));
+  }
+
+  function getResolvedLead(record: LeadRecord): LeadRecord["lead"] {
+    return { ...record.lead, ...(resolvedLeadById[record.lead.id] ?? {}) };
+  }
+
+  function getResolvedRecord(record: LeadRecord): LeadRecord {
+    return {
+      ...record,
+      lead: getResolvedLead(record)
+    };
   }
 
   function getResolvedEmailValue(record: LeadRecord): string {
-    return isRealApolloEmail(record.lead.email) ? record.lead.email : "";
+    const lead = getResolvedLead(record);
+    return isRealApolloEmail(lead.email) ? lead.email : "";
   }
 
   function getEmailDisplay(record: LeadRecord): string {
@@ -193,8 +207,9 @@ export function LocationDetail({
     label: string;
   } | null {
     if (!getResolvedEmailValue(record)) return null;
+    const lead = getResolvedLead(record);
     const runtime = emailSourceByLeadId[record.lead.id];
-    const persisted = record.lead.emailSource;
+    const persisted = lead.emailSource;
     const source: EmailSource = (runtime ?? persisted ?? "existing") as EmailSource;
     switch (source) {
       case "apollo":
@@ -254,12 +269,14 @@ export function LocationDetail({
   }
 
   async function ensureLeadEmail(record: LeadRecord): Promise<LeadRecord | null> {
-    if (getResolvedEmailValue(record)) {
+    const resolvedRecord = getResolvedRecord(record);
+
+    if (getResolvedEmailValue(resolvedRecord)) {
       setEmailLookupStateByLeadId((current) => ({ ...current, [record.lead.id]: "found" }));
       setEmailSourceByLeadId((current) =>
         current[record.lead.id] ? current : { ...current, [record.lead.id]: "existing" }
       );
-      return record;
+      return resolvedRecord;
     }
 
     setEmailLookupLeadId(record.lead.id);
@@ -269,7 +286,7 @@ export function LocationDetail({
       const response = await fetch("/api/leads/enrich-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leadRecord: record })
+        body: JSON.stringify({ leadRecord: resolvedRecord })
       });
 
       const data = (await response.json()) as EnrichEmailResponse;
@@ -365,11 +382,12 @@ export function LocationDetail({
   }
 
   async function ensureLeadResearch(record: LeadRecord): Promise<ResearchState | null> {
-    const existingResearch = researchByLeadId[record.lead.id];
+    const resolvedRecord = getResolvedRecord(record);
+    const existingResearch = researchByLeadId[resolvedRecord.lead.id];
     if (existingResearch && !isLowSignalPitch(existingResearch.pitch)) return existingResearch;
 
     try {
-      const pitch = await fetchPitch(record, undefined, 1, Boolean(existingResearch));
+      const pitch = await fetchPitch(resolvedRecord, undefined, 1, Boolean(existingResearch));
       const nextResearch: ResearchState = {
         status: "researched",
         pitch,
@@ -381,9 +399,9 @@ export function LocationDetail({
         researchedAt: new Date().toISOString()
       };
 
-      setResearchByLeadId((current) => ({ ...current, [record.lead.id]: nextResearch }));
-      setExpandedLeadId(record.lead.id);
-      void generateFollowUps(record, pitch.talkingPoints);
+      setResearchByLeadId((current) => ({ ...current, [resolvedRecord.lead.id]: nextResearch }));
+      setExpandedLeadId(resolvedRecord.lead.id);
+      void generateFollowUps(resolvedRecord, pitch.talkingPoints);
       return nextResearch;
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "Pitch generation failed.");
@@ -397,13 +415,14 @@ export function LocationDetail({
 
     startPitchTransition(async () => {
       try {
-        const existingResearch = researchByLeadId[record.lead.id];
+        const resolvedRecord = getResolvedRecord(record);
+        const existingResearch = researchByLeadId[resolvedRecord.lead.id];
         const forceRefresh = Boolean(existingResearch && isLowSignalPitch(existingResearch.pitch));
-        const pitch = await fetchPitch(record, talkingPointsOverride, 1, forceRefresh);
+        const pitch = await fetchPitch(resolvedRecord, talkingPointsOverride, 1, forceRefresh);
 
         setResearchByLeadId((current) => ({
           ...current,
-          [record.lead.id]: {
+          [resolvedRecord.lead.id]: {
             status: "researched",
             pitch,
             talkingPoints: pitch.talkingPoints,
@@ -414,8 +433,8 @@ export function LocationDetail({
             researchedAt: new Date().toISOString()
           }
         }));
-        setExpandedLeadId(record.lead.id);
-        void generateFollowUps(record, pitch.talkingPoints);
+        setExpandedLeadId(resolvedRecord.lead.id);
+        void generateFollowUps(resolvedRecord, pitch.talkingPoints);
       } catch (error) {
         setPageError(error instanceof Error ? error.message : "Pitch generation failed.");
       }
@@ -844,6 +863,7 @@ export function LocationDetail({
             </div>
 
             {visibleContacts.map((record) => {
+              const lead = getResolvedLead(record);
               const research = researchByLeadId[record.lead.id];
               const isExpanded = expandedLeadId === record.lead.id;
               const isFindingEmail = emailLookupLeadId === record.lead.id;
@@ -855,13 +875,13 @@ export function LocationDetail({
                     <div className="cell primaryCell">
                       <div className="nameBlock">
                         <div className="nameBlockHeader">
-                          <strong>{record.lead.name}</strong>
+                          <strong>{lead.name}</strong>
                           {(() => {
                             const badge = getContactSourceBadge(record);
                             return <span className={badge.className}>{badge.label}</span>;
                           })()}
                         </div>
-                        <span>{record.lead.companyName}</span>
+                        <span>{lead.companyName}</span>
                         {research?.researchedAt ? (
                           <span className="researchedBadge">
                             Researched {new Date(research.researchedAt).toLocaleDateString()}
@@ -879,10 +899,10 @@ export function LocationDetail({
                         );
                       })()}
                     </div>
-                    <div className="cell">{record.lead.title}</div>
+                    <div className="cell">{lead.title}</div>
                     <div className="cell">
                       <span className="statusPill">
-                        {record.lead.department ? DEPARTMENT_FILTER_LABELS[record.lead.department] : "Other"}
+                        {lead.department ? DEPARTMENT_FILTER_LABELS[lead.department] : "Other"}
                       </span>
                     </div>
                     <div className="cell actionCell">
@@ -1024,14 +1044,14 @@ export function LocationDetail({
                         <>
                           <div className="researchCol">
                             <h3>Profile</h3>
-                            <p>{record.lead.name} is {record.lead.title} at {record.lead.companyName}.</p>
+                            <p>{lead.name} is {lead.title} at {lead.companyName}.</p>
                           </div>
                           <div className="researchCol">
                             <h3>Contact Details</h3>
                             <ul className="plainList">
                               <li>Email: {getEmailDisplay(record)}</li>
-                              <li>LinkedIn: {record.lead.linkedinUrl || "Not available yet"}</li>
-                              <li>Domain: {record.lead.companyDomain || "Not available yet"}</li>
+                              <li>LinkedIn: {lead.linkedinUrl || "Not available yet"}</li>
+                              <li>Domain: {lead.companyDomain || "Not available yet"}</li>
                             </ul>
                           </div>
                           <div className="researchCol">
@@ -1041,8 +1061,8 @@ export function LocationDetail({
                           <div className="researchFooter">
                             <div className="microMeta">
                               <span>Contact email: {getEmailDisplay(record)}</span>
-                              <span>Department: {record.lead.department ? DEPARTMENT_FILTER_LABELS[record.lead.department] : "Other"}</span>
-                              <span>Title: {record.lead.title}</span>
+                              <span>Department: {lead.department ? DEPARTMENT_FILTER_LABELS[lead.department] : "Other"}</span>
+                              <span>Title: {lead.title}</span>
                             </div>
                             <div className="inlineActions">
                               <button

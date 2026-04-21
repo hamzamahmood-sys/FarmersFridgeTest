@@ -1,6 +1,7 @@
 import { personaToApolloTitles, resolveContactDepartment, scoreCompanyFit, sortLeadRecords } from "@/lib/utils";
 import type { LeadRecord, ProspectCompany, SearchFilters } from "@/lib/types";
 import { apolloFetch } from "./client";
+import { enrichLeadContactFromApollo } from "./enrich";
 import {
   getCompactCompanyNameVariant,
   getCompanyKeywordFallback,
@@ -62,6 +63,8 @@ const COMMON_SECOND_LEVEL_DOMAIN_SUFFIXES = new Set([
   "net",
   "org"
 ]);
+
+const CONTACT_ENRICHMENT_LIMIT = 10;
 
 function getOrganizationResults(
   response: ApolloOrganizationSearchResponse
@@ -568,5 +571,43 @@ export async function searchLeadsForCompany(
     return record;
   });
 
-  return sortLeadRecords(leads);
+  const sortedLeads = sortLeadRecords(leads);
+  const enrichmentCount = Math.min(sortedLeads.length, CONTACT_ENRICHMENT_LIMIT);
+
+  if (enrichmentCount === 0) {
+    return sortedLeads;
+  }
+
+  const enrichedResults = await Promise.allSettled(
+    sortedLeads
+      .slice(0, enrichmentCount)
+      .map(async (record) => (await enrichLeadContactFromApollo(record)).leadRecord)
+  );
+
+  return sortLeadRecords(
+    sortedLeads.map((record, index) => {
+      if (index >= enrichmentCount) return record;
+
+      const result = enrichedResults[index];
+      if (!result || result.status !== "fulfilled") {
+        return record;
+      }
+
+      return {
+        ...record,
+        ...result.value,
+        lead: {
+          ...record.lead,
+          ...result.value.lead,
+          emailSource: isRealApolloEmail(result.value.lead.email) ? "apollo" : record.lead.emailSource,
+          source: record.lead.source
+        },
+        company: {
+          ...record.company,
+          ...result.value.company
+        },
+        priorityScore: record.priorityScore
+      };
+    })
+  );
 }

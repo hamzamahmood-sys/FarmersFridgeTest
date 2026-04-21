@@ -134,6 +134,59 @@ function buildFallbackPitch(record: LeadRecord, talkingPointsOverride?: string):
   };
 }
 
+function buildFallbackFollowUpPitch(
+  record: LeadRecord,
+  bridge: string,
+  seedTalkingPoints: string,
+  step: 2 | 3
+): GeneratedPitch {
+  const firstName = record.lead.name.split(" ")[0] || record.lead.name;
+
+  if (step === 2) {
+    return {
+      subject: normalizeGeneratedCopy(`A simple perk for ${record.lead.companyName}`),
+      body: normalizeGeneratedCopy(
+        [
+          `Hi ${firstName},`,
+          "",
+          "I sent a note last week and wanted to share a different angle.",
+          `Teams like ${record.lead.companyName} often use Farmer's Fridge to give employees a 24/7 fresh food option without the cost or complexity of a cafeteria.`,
+          "If it's helpful, I can send a quick overview of how other workplaces are making it work.",
+          "",
+          "Best,",
+          "Farmer's Fridge"
+        ].join("\n")
+      ),
+      talkingPoints: seedTalkingPoints,
+      bridgeInsight: bridge,
+      summary: "",
+      painPoints: [],
+      variableEvidence: []
+    };
+  }
+
+  return {
+    subject: normalizeGeneratedCopy(`Close the loop on ${record.lead.companyName}`),
+    body: normalizeGeneratedCopy(
+      [
+        `Hi ${firstName},`,
+        "",
+        `Just one last bump in case improving food access is on the radar at ${record.lead.companyName}.`,
+        "Farmer's Fridge can be a simple way to support morale and convenience without adding cafeteria overhead.",
+        "Happy to close the loop if timing is off.",
+        "",
+        "Best,",
+        "Farmer's Fridge"
+      ].join("\n")
+    ),
+    talkingPoints: seedTalkingPoints,
+    bridgeInsight: bridge,
+    summary: "",
+    painPoints: [],
+    variableEvidence: []
+  };
+}
+
 async function generateFollowUpPitch(
   record: LeadRecord,
   talkingPointsOverride?: string,
@@ -210,16 +263,7 @@ async function generateFollowUpPitch(
     try {
       parsed = JSON.parse(rawText) as Partial<GeneratedPitch>;
     } catch {
-      // OpenAI returned malformed JSON — return a safe minimal follow-up.
-      return {
-        subject: `Follow-up: ${record.lead.companyName}`,
-        body: `Hi ${firstName},\n\nJust following up on my last note about Farmer's Fridge. Happy to keep it brief — worth a quick chat?\n\nBest,\nFarmer's Fridge`,
-        talkingPoints: seedTalkingPoints,
-        bridgeInsight: bridge,
-        summary: "",
-        painPoints: [],
-        variableEvidence: []
-      };
+      return buildFallbackFollowUpPitch(record, bridge, seedTalkingPoints, step);
     }
 
     return {
@@ -232,7 +276,11 @@ async function generateFollowUpPitch(
       variableEvidence: []
     };
   } catch (error) {
-    throw getOpenAIError(error);
+    console.warn(
+      `[OpenAI] follow-up step ${step} fallback for ${record.lead.companyName}:`,
+      error instanceof Error ? error.message : error
+    );
+    return buildFallbackFollowUpPitch(record, bridge, seedTalkingPoints, step);
   }
 }
 
