@@ -354,6 +354,26 @@ export function OutreachDashboard() {
     });
   }, [contactSearch, currentContacts, departmentFilter]);
 
+  const contactCountsByDepartment = useMemo(() => {
+    return currentContacts.reduce<Record<Exclude<DepartmentFilter, "all">, number>>(
+      (counts, record) => {
+        const department = record.lead.department || "other";
+        counts[department] += 1;
+        return counts;
+      },
+      {
+        facilities: 0,
+        hr_people: 0,
+        workplace: 0,
+        fnb: 0,
+        csuite: 0,
+        other: 0
+      }
+    );
+  }, [currentContacts]);
+
+  const hasActiveContactFilters = departmentFilter !== "all" || Boolean(contactSearch.trim());
+
   const unresearchedCount = useMemo(
     () =>
       currentContacts.filter((record) => {
@@ -1261,6 +1281,11 @@ export function OutreachDashboard() {
     );
   }
 
+  function resetContactFilters() {
+    setContactSearch("");
+    setDepartmentFilter("all");
+  }
+
   function renderDashboardPage() {
     const stageRows = (Object.keys(PIPELINE_STAGE_LABELS) as PipelineStage[]).map((stage) => ({
       label: PIPELINE_STAGE_LABELS[stage],
@@ -1802,7 +1827,9 @@ export function OutreachDashboard() {
           <div className="sectionHeader sectionHeader--filters">
             <div>
               <h2>Contacts</h2>
-              <p>{visibleContacts.length} visible contacts at this location.</p>
+              <p>
+                {visibleContacts.length} visible of {currentContacts.length} loaded contacts at this location.
+              </p>
             </div>
             <div className="sectionControls">
               <input
@@ -1824,7 +1851,7 @@ export function OutreachDashboard() {
               type="button"
               onClick={() => setDepartmentFilter("all")}
             >
-              All
+              All ({currentContacts.length})
             </button>
             {(Object.keys(DEPARTMENT_FILTER_LABELS) as Array<Exclude<DepartmentFilter, "all">>).map((department) => (
               <button
@@ -1833,7 +1860,7 @@ export function OutreachDashboard() {
                 type="button"
                 onClick={() => setDepartmentFilter(department)}
               >
-                {DEPARTMENT_FILTER_LABELS[department]}
+                {DEPARTMENT_FILTER_LABELS[department]} ({contactCountsByDepartment[department]})
               </button>
             ))}
           </div>
@@ -2019,6 +2046,19 @@ export function OutreachDashboard() {
                   </div>
                 );
               })}
+            </div>
+          ) : currentContacts.length > 0 ? (
+            <div className="emptyStateTable">
+              <Building2 size={34} />
+              <p>
+                No contacts match the current filters.
+                {departmentFilter !== "all" ? ` ${DEPARTMENT_FILTER_LABELS[departmentFilter]} is selected.` : ""}
+              </p>
+              {hasActiveContactFilters ? (
+                <button className="secondaryButton" type="button" onClick={resetContactFilters}>
+                  Show All Contacts
+                </button>
+              ) : null}
             </div>
           ) : (
             <div className="emptyStateTable">
