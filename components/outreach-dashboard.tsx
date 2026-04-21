@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, useState, useTransition } from "react";
 import {
+  ArrowLeft,
+  ArrowRight,
   ArrowUpRight,
   Building2,
   ChevronDown,
   ChevronUp,
-  CircleCheck,
   Copy,
   Download,
   LayoutDashboard,
@@ -15,16 +16,26 @@ import {
   Search,
   Send,
   Sparkles,
+  Trash2,
   Upload,
   Zap
 } from "lucide-react";
 import { DEFAULT_SEARCH_FILTERS, PERSONA_LABELS } from "@/lib/constants";
 import type {
   ApolloCreditEstimate,
+  DashboardStats,
   GeneratedPitch,
   LeadRecord,
+  LocationDetail,
+  LocationType,
+  PipelineStage,
+  PitchType,
   ProspectCompany,
-  SearchFilters
+  SavedLocation,
+  SavedLocationSummary,
+  SearchFilters,
+  StoredEmail,
+  ToneSettings
 } from "@/lib/types";
 
 type GmailStatus = {
@@ -36,13 +47,23 @@ type GmailStatus = {
 type CompanySearchResponse = {
   companies: ProspectCompany[];
   creditEstimate: ApolloCreditEstimate;
-  fromCache?: boolean;
 };
 
-type CompanyContactsResponse = {
-  company: ProspectCompany;
-  leads: LeadRecord[];
-  fromCache?: boolean;
+type LocationListResponse = {
+  locations: SavedLocationSummary[];
+};
+
+type DashboardResponse = {
+  stats: DashboardStats;
+  recentLocations: SavedLocationSummary[];
+};
+
+type EmailsResponse = {
+  emails: StoredEmail[];
+};
+
+type ToneResponse = {
+  tone: ToneSettings;
 };
 
 type EnrichEmailResponse = {
@@ -55,44 +76,81 @@ type EnrichEmailResponse = {
   error?: string;
 };
 
-type RecentSearch = {
-  query: string;
-  count: number;
-  fetchedAt: string;
-};
-
-type LeadContactStatus = "new" | "contacted" | "replied" | "no_response" | "disqualified";
-
-type FollowUpRecord = {
+type FollowUpDraft = {
   subject: string;
   body: string;
-  state: "generated" | "drafted";
 };
-
-type DraftRecord = {
-  leadId: string;
-  contactName: string;
-  companyName: string;
-  email: string;
-  subject: string;
-  body: string;
-  state: "generated" | "drafted";
-  followUps: FollowUpRecord[];
-};
-
-type DraftFilter = "all" | "generated" | "drafted";
 
 type ResearchState = {
   status: "idle" | "researched";
   pitch: GeneratedPitch;
   talkingPoints: string;
-  followUp1?: { subject: string; body: string };
-  followUp2?: { subject: string; body: string };
-  researchedAt?: string; // ISO timestamp of when research was last run
+  followUp1?: FollowUpDraft;
+  followUp2?: FollowUpDraft;
+  researchedAt?: string;
 };
 
 type EmailLookupState = "idle" | "looking" | "found" | "not_found";
 type EmailSource = "existing" | "apollo" | "tomba" | "none";
+type NavPage = "dashboard" | "contacts" | "emails" | "tone";
+type SearchMode = "search" | "bulk";
+type EmailFilter = "all" | "generated" | "approved" | "sent";
+type DepartmentFilter = "all" | "facilities" | "hr_people" | "workplace" | "fnb" | "csuite" | "other";
+
+const navItems: Array<{ id: NavPage; label: string; icon: typeof LayoutDashboard }> = [
+  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { id: "contacts", label: "Find Contacts", icon: Search },
+  { id: "emails", label: "Emails", icon: Mail },
+  { id: "tone", label: "Tone of Voice", icon: Sparkles }
+];
+
+const US_STATES = [
+  "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut",
+  "Delaware", "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa",
+  "Kansas", "Kentucky", "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan",
+  "Minnesota", "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada",
+  "New Hampshire", "New Jersey", "New Mexico", "New York", "North Carolina",
+  "North Dakota", "Ohio", "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island",
+  "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah", "Vermont",
+  "Virginia", "Washington", "Washington DC", "West Virginia", "Wisconsin", "Wyoming"
+];
+
+const LOCATION_TYPE_LABELS: Record<LocationType, string> = {
+  hospital: "Hospital",
+  corporate: "Corporate",
+  university: "University",
+  gym: "Gym",
+  airport: "Airport",
+  other: "Other"
+};
+
+const PIPELINE_STAGE_LABELS: Record<PipelineStage, string> = {
+  prospect: "Prospect",
+  meeting: "Meeting",
+  won: "Won",
+  lost: "Lost"
+};
+
+const PITCH_TYPE_LABELS: Record<PitchType, string> = {
+  farmers_fridge: "Fridge",
+  vending: "Vending",
+  catering: "Catering"
+};
+
+const EMAIL_STATUS_LABELS: Record<Exclude<EmailFilter, "all">, string> = {
+  generated: "Generated",
+  approved: "Approved",
+  sent: "Sent"
+};
+
+const DEPARTMENT_FILTER_LABELS: Record<Exclude<DepartmentFilter, "all">, string> = {
+  facilities: "Facilities",
+  hr_people: "HR / People",
+  workplace: "Workplace",
+  fnb: "F&B",
+  csuite: "C-Suite",
+  other: "Other"
+};
 
 function isLowSignalPitch(pitch: GeneratedPitch): boolean {
   const body = pitch.body.toLowerCase();
@@ -106,37 +164,43 @@ function isLowSignalPitch(pitch: GeneratedPitch): boolean {
   );
 }
 
-const CONTACT_STATUS_LABELS: Record<LeadContactStatus, string> = {
-  new: "New",
-  contacted: "Contacted",
-  replied: "Replied",
-  no_response: "No Response",
-  disqualified: "DQ'd"
-};
+function locationToProspectCompany(location: SavedLocation): ProspectCompany {
+  return {
+    id: location.organizationId || location.id,
+    name: location.companyName,
+    domain: location.companyDomain,
+    priorityScore: 0,
+    company: {
+      industry: location.industry,
+      employeeCount: location.employeeCount,
+      hqCity: location.hqCity,
+      hqState: location.hqState,
+      hqCountry: location.hqCountry,
+      keywords: [],
+      techStack: [],
+      about: location.about,
+      deliveryZone: location.deliveryZone
+    }
+  };
+}
 
-const navItems = [
-  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { id: "search", label: "Search", icon: Search },
-  { id: "drafts", label: "Drafts", icon: Mail }
-] as const;
+function formatCompanyMeta(company: {
+  hqCity?: string;
+  hqState?: string;
+  employeeCount?: number;
+}): string {
+  const location = [company.hqCity, company.hqState].filter(Boolean).join(", ");
+  const employees = company.employeeCount ? `${company.employeeCount.toLocaleString()}+` : "";
+  return [location, employees].filter(Boolean).join(" · ");
+}
 
-const US_STATES = [
-  "Alabama","Alaska","Arizona","Arkansas","California","Colorado","Connecticut",
-  "Delaware","Florida","Georgia","Hawaii","Idaho","Illinois","Indiana","Iowa",
-  "Kansas","Kentucky","Louisiana","Maine","Maryland","Massachusetts","Michigan",
-  "Minnesota","Mississippi","Missouri","Montana","Nebraska","Nevada",
-  "New Hampshire","New Jersey","New Mexico","New York","North Carolina",
-  "North Dakota","Ohio","Oklahoma","Oregon","Pennsylvania","Rhode Island",
-  "South Carolina","South Dakota","Tennessee","Texas","Utah","Vermont",
-  "Virginia","Washington","Washington DC","West Virginia","Wisconsin","Wyoming"
-];
-
-const DRAFTS_STORAGE_KEY = "ff-email-drafts-v1";
-const RESEARCH_STORAGE_KEY = "ff-email-research-v1";
+function getStatusClass(status: Exclude<EmailFilter, "all">) {
+  return `statusBadge statusBadge--${status}`;
+}
 
 export function OutreachDashboard() {
-  const [activePage, setActivePage] = useState<"dashboard" | "search" | "drafts">("search");
-  const [searchMode, setSearchMode] = useState<"search" | "bulk">("search");
+  const [activePage, setActivePage] = useState<NavPage>("dashboard");
+  const [searchMode, setSearchMode] = useState<SearchMode>("search");
   const [filters, setFilters] = useState<SearchFilters>({
     personas: [...DEFAULT_SEARCH_FILTERS.personas] as SearchFilters["personas"],
     industryQuery: DEFAULT_SEARCH_FILTERS.industryQuery,
@@ -150,174 +214,410 @@ export function OutreachDashboard() {
   const [hasSearched, setHasSearched] = useState(false);
   const [creditEstimate, setCreditEstimate] = useState<ApolloCreditEstimate | null>(null);
   const [companies, setCompanies] = useState<ProspectCompany[]>([]);
-  const [selectedCompany, setSelectedCompany] = useState<ProspectCompany | null>(null);
-  const [companyLoadingId, setCompanyLoadingId] = useState<string | null>(null);
-  const [leads, setLeads] = useState<LeadRecord[]>([]);
-  const [searchError, setSearchError] = useState<string | null>(null);
-  const [pitchError, setPitchError] = useState<string | null>(null);
-  const [draftError, setDraftError] = useState<string | null>(null);
-  const [draftSuccess, setDraftSuccess] = useState<string | null>(null);
-  const [gmailStatus, setGmailStatus] = useState<GmailStatus | null>(null);
-  const [searchPending, startSearchTransition] = useTransition();
-  const [pitchPending, startPitchTransition] = useTransition();
-  const [draftPending, startDraftTransition] = useTransition();
-  const [expandedLeadId, setExpandedLeadId] = useState<string | null>(null);
+  const [locations, setLocations] = useState<SavedLocationSummary[]>([]);
+  const [dashboardStats, setDashboardStats] = useState<DashboardStats>({
+    locationsCount: 0,
+    draftsCount: 0,
+    wonCount: 0,
+    pipelineByStage: { prospect: 0, meeting: 0, won: 0, lost: 0 },
+    byLocationType: { hospital: 0, corporate: 0, university: 0, gym: 0, airport: 0, other: 0 }
+  });
+  const [recentLocations, setRecentLocations] = useState<SavedLocationSummary[]>([]);
+  const [selectedLocationId, setSelectedLocationId] = useState<string | null>(null);
+  const [locationDetail, setLocationDetail] = useState<LocationDetail | null>(null);
+  const [locationQuery, setLocationQuery] = useState("");
+  const [locationTypeFilter, setLocationTypeFilter] = useState<LocationType | "all">("all");
+  const [pipelineStageFilter, setPipelineStageFilter] = useState<PipelineStage | "all">("all");
+  const [emails, setEmails] = useState<StoredEmail[]>([]);
+  const [emailFilter, setEmailFilter] = useState<EmailFilter>("all");
+  const [emailSearch, setEmailSearch] = useState("");
+  const [selectedEmailId, setSelectedEmailId] = useState<string | null>(null);
+  const [emailEditor, setEmailEditor] = useState<{ subject: string; body: string; status: Exclude<EmailFilter, "all"> }>({
+    subject: "",
+    body: "",
+    status: "generated"
+  });
+  const [toneSettings, setToneSettings] = useState<ToneSettings>({
+    voiceDescription: "",
+    doExamples: "",
+    dontExamples: "",
+    sampleEmail: ""
+  });
+  const [notesDraft, setNotesDraft] = useState("");
+  const [contactSearch, setContactSearch] = useState("");
+  const [departmentFilter, setDepartmentFilter] = useState<DepartmentFilter>("all");
   const [researchByLeadId, setResearchByLeadId] = useState<Record<string, ResearchState>>({});
+  const [expandedLeadId, setExpandedLeadId] = useState<string | null>(null);
   const [emailLookupLeadId, setEmailLookupLeadId] = useState<string | null>(null);
   const [emailLookupStateByLeadId, setEmailLookupStateByLeadId] = useState<Record<string, EmailLookupState>>({});
   const [emailSourceByLeadId, setEmailSourceByLeadId] = useState<Record<string, EmailSource>>({});
-  const [draftPrepLeadId, setDraftPrepLeadId] = useState<string | null>(null);
-  const [drafts, setDrafts] = useState<DraftRecord[]>([]);
-  const [selectedDraftLeadId, setSelectedDraftLeadId] = useState<string | null>(null);
-  const [draftFilter, setDraftFilter] = useState<DraftFilter>("all");
-  const [fromCache, setFromCache] = useState<boolean>(false);
-  const [recentSearches, setRecentSearches] = useState<RecentSearch[]>([]);
-  const [leadStatusById, setLeadStatusById] = useState<Record<string, LeadContactStatus>>({});
   const [bulkResearchProgress, setBulkResearchProgress] = useState<{
     total: number;
     completed: number;
     active: boolean;
   } | null>(null);
   const [isBulkResearching, setIsBulkResearching] = useState(false);
-  const [draftSequenceTab, setDraftSequenceTab] = useState<0 | 1 | 2>(0);
-  const [draftsHydrated, setDraftsHydrated] = useState(false);
-  const [researchHydrated, setResearchHydrated] = useState(false);
+  const [loadingLocationId, setLoadingLocationId] = useState<string | null>(null);
+  const [gmailStatus, setGmailStatus] = useState<GmailStatus | null>(null);
+  const [searchPending, startSearchTransition] = useTransition();
+  const [pitchPending, startPitchTransition] = useTransition();
+  const [draftPending, startDraftTransition] = useTransition();
+  const [savePending, startSaveTransition] = useTransition();
+  const [pageError, setPageError] = useState<string | null>(null);
+  const [pageSuccess, setPageSuccess] = useState<string | null>(null);
 
-  const filteredDrafts = useMemo(
-    () => (draftFilter === "all" ? drafts : drafts.filter((d) => d.state === draftFilter)),
-    [drafts, draftFilter]
+  const selectedEmail = useMemo(
+    () => filteredEmails(emails, emailFilter, emailSearch).find((email) => email.id === selectedEmailId)
+      || filteredEmails(emails, emailFilter, emailSearch)[0]
+      || null,
+    [emails, emailFilter, emailSearch, selectedEmailId]
   );
 
-  const selectedDraft = useMemo(
-    () => filteredDrafts.find((draft) => draft.leadId === selectedDraftLeadId) || filteredDrafts[0] || null,
-    [filteredDrafts, selectedDraftLeadId]
-  );
+  const currentLocation = locationDetail?.location ?? null;
+  const currentContacts = locationDetail?.contacts ?? [];
+  const currentLocationEmails = locationDetail?.emails ?? [];
 
-  useEffect(() => {
-    setDraftSequenceTab(0);
-  }, [selectedDraftLeadId]);
+  const visibleLocations = useMemo(() => {
+    return locations.filter((location) => {
+      const matchesQuery = locationQuery.trim()
+        ? [
+            location.companyName,
+            location.companyDomain,
+            location.industry,
+            location.category,
+            location.hqCity,
+            location.hqState
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase()
+            .includes(locationQuery.trim().toLowerCase())
+        : true;
 
-  useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(DRAFTS_STORAGE_KEY);
-      if (!raw) {
-        setDraftsHydrated(true);
-        return;
-      }
+      const matchesType = locationTypeFilter === "all" || location.locationType === locationTypeFilter;
+      const matchesStage = pipelineStageFilter === "all" || location.pipelineStage === pipelineStageFilter;
 
-      const parsed = JSON.parse(raw) as {
-        drafts?: DraftRecord[];
-        selectedDraftLeadId?: string | null;
-        draftFilter?: DraftFilter;
-      };
-
-      if (Array.isArray(parsed.drafts)) {
-        setDrafts(parsed.drafts);
-      }
-      if (typeof parsed.selectedDraftLeadId === "string" || parsed.selectedDraftLeadId === null) {
-        setSelectedDraftLeadId(parsed.selectedDraftLeadId ?? null);
-      }
-      if (parsed.draftFilter === "all" || parsed.draftFilter === "generated" || parsed.draftFilter === "drafted") {
-        setDraftFilter(parsed.draftFilter);
-      }
-    } catch {
-      // Ignore malformed local state and start fresh.
-    } finally {
-      setDraftsHydrated(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!draftsHydrated) return;
-
-    window.localStorage.setItem(
-      DRAFTS_STORAGE_KEY,
-      JSON.stringify({
-        drafts,
-        selectedDraftLeadId,
-        draftFilter
-      })
-    );
-  }, [draftFilter, drafts, draftsHydrated, selectedDraftLeadId]);
-
-  // ── Research persistence ──────────────────────────────────────────────────
-  useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(RESEARCH_STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as Record<string, ResearchState>;
-        if (parsed && typeof parsed === "object") {
-          setResearchByLeadId(parsed);
-        }
-      }
-    } catch {
-      // Ignore corrupted data
-    } finally {
-      setResearchHydrated(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!researchHydrated) return;
-    try {
-      window.localStorage.setItem(RESEARCH_STORAGE_KEY, JSON.stringify(researchByLeadId));
-    } catch {
-      // localStorage quota exceeded — skip silently
-    }
-  }, [researchByLeadId, researchHydrated]);
-
-  const researchedCount = Object.keys(researchByLeadId).length;
-  const deliveryZoneMatches = leads.filter((lead) => lead.company.deliveryZone !== "Other").length;
-  const dashboardStats = [
-    { label: selectedCompany ? "Contacts loaded" : "Companies loaded", value: selectedCompany ? leads.length : companies.length },
-    { label: "Researched", value: researchedCount },
-    { label: "Drafts queued", value: drafts.length },
-    { label: "Zone matches", value: deliveryZoneMatches }
-  ];
-
-  useEffect(() => {
-    setCreditEstimate({
-      peopleSearchCalls: 1,
-      organizationEnrichCalls: 1,
-      totalEstimatedOperations: 2,
-      note:
-        "Search starts with Apollo's organization search, then loads contacts from the company you pick using Apollo's free people search endpoint."
+      return matchesQuery && matchesType && matchesStage;
     });
-  }, [filters.limit]);
+  }, [locationQuery, locationTypeFilter, locations, pipelineStageFilter]);
+
+  const visibleContacts = useMemo(() => {
+    return currentContacts.filter((record) => {
+      const matchesQuery = contactSearch.trim()
+        ? [
+            record.lead.name,
+            record.lead.email,
+            record.lead.title,
+            record.lead.companyName,
+            record.lead.department
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase()
+            .includes(contactSearch.trim().toLowerCase())
+        : true;
+
+      const matchesDepartment = departmentFilter === "all" || record.lead.department === departmentFilter;
+      return matchesQuery && matchesDepartment;
+    });
+  }, [contactSearch, currentContacts, departmentFilter]);
+
+  const unresearchedCount = useMemo(
+    () =>
+      currentContacts.filter((record) => {
+        const research = researchByLeadId[record.lead.id];
+        return !research || isLowSignalPitch(research.pitch);
+      }).length,
+    [currentContacts, researchByLeadId]
+  );
+
+  useEffect(() => {
+    void refreshInitialData();
+  }, []);
 
   useEffect(() => {
     setLimitInput(String(filters.limit));
   }, [filters.limit]);
 
   useEffect(() => {
-    void refreshGmailStatus();
-    void fetch("/api/leads/recent")
-      .then((r) => r.json())
-      .then((d) => setRecentSearches((d as { searches: RecentSearch[] }).searches ?? []));
-  }, []);
+    if (!currentLocation) {
+      setNotesDraft("");
+      return;
+    }
+
+    setNotesDraft(currentLocation.notes || "");
+  }, [currentLocation?.id, currentLocation?.notes]);
+
+  useEffect(() => {
+    if (!selectedEmail) {
+      setEmailEditor({ subject: "", body: "", status: "generated" });
+      return;
+    }
+
+    setEmailEditor({
+      subject: selectedEmail.subject,
+      body: selectedEmail.body,
+      status: selectedEmail.status
+    });
+  }, [selectedEmail?.id, selectedEmail?.subject, selectedEmail?.body, selectedEmail?.status]);
+
+  async function refreshInitialData() {
+    await Promise.all([
+      refreshGmailStatus(),
+      loadDashboard(),
+      loadLocations(),
+      loadEmails(),
+      loadTone()
+    ]);
+  }
 
   async function refreshGmailStatus() {
-    const response = await fetch("/api/gmail/status");
-    const data = (await response.json()) as GmailStatus;
-    setGmailStatus(data);
+    try {
+      const response = await fetch("/api/gmail/status");
+      const data = (await response.json()) as GmailStatus;
+      setGmailStatus(data);
+    } catch {
+      setGmailStatus(null);
+    }
+  }
+
+  async function loadDashboard() {
+    const response = await fetch("/api/dashboard");
+    const data = (await response.json()) as DashboardResponse & { error?: string };
+
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to load dashboard.");
+    }
+
+    setDashboardStats(data.stats);
+    setRecentLocations(data.recentLocations);
+  }
+
+  async function loadLocations() {
+    const response = await fetch("/api/locations");
+    const data = (await response.json()) as LocationListResponse & { error?: string };
+
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to load locations.");
+    }
+
+    setLocations(data.locations);
+  }
+
+  async function loadEmails() {
+    const response = await fetch("/api/emails");
+    const data = (await response.json()) as EmailsResponse & { error?: string };
+
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to load emails.");
+    }
+
+    setEmails(data.emails);
+  }
+
+  async function loadTone() {
+    const response = await fetch("/api/tone");
+    const data = (await response.json()) as ToneResponse & { error?: string };
+
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to load tone settings.");
+    }
+
+    setToneSettings(data.tone);
+  }
+
+  async function openLocation(locationId: string) {
+    setLoadingLocationId(locationId);
+    setPageError(null);
+    setPageSuccess(null);
+
+    try {
+      const response = await fetch(`/api/locations/${locationId}`);
+      const data = (await response.json()) as LocationDetail & { error?: string };
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to load location.");
+      }
+
+      setSelectedLocationId(locationId);
+      setLocationDetail(data);
+      setExpandedLeadId(null);
+      setResearchByLeadId({});
+      setEmailLookupStateByLeadId({});
+      setEmailSourceByLeadId({});
+      setContactSearch("");
+      setDepartmentFilter("all");
+      setActivePage("contacts");
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Failed to load location.");
+    } finally {
+      setLoadingLocationId(null);
+    }
+  }
+
+  async function saveCompanyToPipeline(company: ProspectCompany) {
+    const response = await fetch("/api/locations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ company })
+    });
+
+    const data = (await response.json()) as { location: SavedLocation; error?: string };
+    if (!response.ok || !data.location) {
+      throw new Error(data.error || "Failed to save location.");
+    }
+
+    await Promise.all([loadLocations(), loadDashboard()]);
+    setPageSuccess(`${company.name} saved to the pipeline.`);
+    return data.location;
+  }
+
+  async function handleOpenCompany(company: ProspectCompany) {
+    try {
+      const location = await saveCompanyToPipeline(company);
+      await openLocation(location.id);
+      await loadContactsForLocation(location);
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Failed to open company.");
+    }
+  }
+
+  async function loadContactsForLocation(locationArg?: SavedLocation) {
+    const location = locationArg || currentLocation;
+    if (!location) return;
+
+    setLoadingLocationId(location.id);
+    setPageError(null);
+
+    try {
+      const response = await fetch("/api/leads/by-company", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          company: locationToProspectCompany(location),
+          filters: {
+            ...filters,
+            industryQuery: query || location.companyName
+          },
+          searchQuery: query || location.companyName,
+          locationId: location.id
+        })
+      });
+
+      const data = (await response.json()) as {
+        leads?: LeadRecord[];
+        error?: string;
+      };
+
+      if (!response.ok || !data.leads) {
+        throw new Error(data.error || "Failed to load contacts.");
+      }
+
+      setLocationDetail((current) =>
+        current && current.location.id === location.id
+          ? { ...current, contacts: data.leads ?? [] }
+          : {
+              location,
+              contacts: data.leads ?? [],
+              emails: currentLocationEmails
+            }
+      );
+
+      await Promise.all([loadLocations(), loadDashboard()]);
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Failed to load contacts.");
+    } finally {
+      setLoadingLocationId(null);
+    }
+  }
+
+  async function runSearch() {
+    setPageError(null);
+    setPageSuccess(null);
+
+    startSearchTransition(async () => {
+      try {
+        const response = await fetch("/api/companies/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...filters, industryQuery: query })
+        });
+
+        const data = (await response.json()) as CompanySearchResponse & { error?: string };
+        if (!response.ok) {
+          throw new Error(data.error || "Search failed.");
+        }
+
+        setHasSearched(true);
+        setCompanies(data.companies);
+        setCreditEstimate(data.creditEstimate);
+        setActivePage("contacts");
+      } catch (error) {
+        setPageError(error instanceof Error ? error.message : "Search failed.");
+      }
+    });
+  }
+
+  async function runBulkImport() {
+    const lines = bulkInput
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    if (lines.length === 0) {
+      setPageError("Paste at least one company, domain, or market query for bulk import.");
+      return;
+    }
+
+    setQuery(lines[0] || query);
+    await runSearchWithQuery(lines[0] || query, Math.min(Math.max(lines.length, 10), 20));
+  }
+
+  async function runSearchWithQuery(nextQuery: string, nextLimit?: number) {
+    setPageError(null);
+    setPageSuccess(null);
+
+    const payload = {
+      ...filters,
+      industryQuery: nextQuery,
+      limit: nextLimit ?? filters.limit
+    };
+
+    startSearchTransition(async () => {
+      try {
+        const response = await fetch("/api/companies/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+
+        const data = (await response.json()) as CompanySearchResponse & { error?: string };
+        if (!response.ok) {
+          throw new Error(data.error || "Search failed.");
+        }
+
+        setHasSearched(true);
+        setQuery(nextQuery);
+        setCompanies(data.companies);
+        setCreditEstimate(data.creditEstimate);
+        setFilters((current) => ({ ...current, limit: payload.limit }));
+        setActivePage("contacts");
+      } catch (error) {
+        setPageError(error instanceof Error ? error.message : "Search failed.");
+      }
+    });
   }
 
   function replaceLeadRecord(nextRecord: LeadRecord) {
-    setLeads((current) =>
-      current.map((record) => (record.lead.id === nextRecord.lead.id ? nextRecord : record))
-    );
-  }
-
-  function resetLeadResults() {
-    setLeads([]);
-    setSelectedCompany(null);
-    setResearchByLeadId({});
-    setEmailLookupStateByLeadId({});
-    setEmailSourceByLeadId({});
-    setExpandedLeadId(null);
-    setLeadStatusById({});
-    setBulkResearchProgress(null);
-    setIsBulkResearching(false);
+    setLocationDetail((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        contacts: current.contacts.map((record) =>
+          record.lead.id === nextRecord.lead.id ? nextRecord : record
+        )
+      };
+    });
   }
 
   function getEmailDisplay(record: LeadRecord): string {
@@ -338,9 +638,6 @@ export function OutreachDashboard() {
       return record;
     }
 
-    setPitchError(null);
-    setDraftError(null);
-    setDraftSuccess(null);
     setEmailLookupLeadId(record.lead.id);
     setEmailLookupStateByLeadId((current) => ({ ...current, [record.lead.id]: "looking" }));
 
@@ -362,10 +659,10 @@ export function OutreachDashboard() {
         const note = data.providerNotes?.[0];
         const status = data.emailStatus ? ` Apollo marked the email status as ${data.emailStatus}.` : "";
         setEmailLookupStateByLeadId((current) => ({ ...current, [record.lead.id]: "not_found" }));
-        setDraftError(
+        setPageError(
           note
-            ? `No email found for ${record.lead.name} yet. ${note}${status} We can still generate the outreach copy, but Gmail draft creation will stay disabled until an email is found.`
-            : `No email found for ${record.lead.name} yet.${status} We can still generate the outreach copy, but Gmail draft creation will stay disabled until an email is found.`
+            ? `No email found for ${record.lead.name} yet. ${note}${status}`
+            : `No email found for ${record.lead.name} yet.${status}`
         );
         return data.leadRecord;
       }
@@ -375,166 +672,10 @@ export function OutreachDashboard() {
       return data.leadRecord;
     } catch (error) {
       setEmailLookupStateByLeadId((current) => ({ ...current, [record.lead.id]: "not_found" }));
-      setDraftError(error instanceof Error ? error.message : "Email lookup failed.");
+      setPageError(error instanceof Error ? error.message : "Email lookup failed.");
       return null;
     } finally {
       setEmailLookupLeadId(null);
-    }
-  }
-
-  async function ensureLeadResearch(record: LeadRecord): Promise<ResearchState | null> {
-    const existingResearch = researchByLeadId[record.lead.id];
-    if (existingResearch && !isLowSignalPitch(existingResearch.pitch)) {
-      setExpandedLeadId(record.lead.id);
-      return existingResearch;
-    }
-
-    try {
-      const pitch = await fetchPitch(record, undefined, 1, Boolean(existingResearch));
-      const nextResearch: ResearchState = {
-        status: "researched",
-        pitch,
-        talkingPoints: pitch.talkingPoints,
-        researchedAt: new Date().toISOString()
-      };
-
-      setExpandedLeadId(record.lead.id);
-      setResearchByLeadId((current) => ({
-        ...current,
-        [record.lead.id]: nextResearch
-      }));
-      void generateFollowUps(record, pitch.talkingPoints);
-
-      return nextResearch;
-    } catch (error) {
-      setPitchError(error instanceof Error ? error.message : "Pitch generation failed.");
-      return null;
-    }
-  }
-
-  async function runSearch(forceRefresh = false) {
-    void forceRefresh;
-    setSearchError(null);
-    setPitchError(null);
-    setDraftError(null);
-    setDraftSuccess(null);
-
-    startSearchTransition(async () => {
-      const response = await fetch("/api/companies/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...filters, industryQuery: query })
-      });
-
-      const data = (await response.json()) as CompanySearchResponse & { error?: string };
-
-      if (!response.ok) {
-        setSearchError(data.error || "Search failed.");
-        return;
-      }
-
-      setHasSearched(true);
-      setCreditEstimate(data.creditEstimate);
-      setCompanies(data.companies);
-      resetLeadResults();
-      setFromCache(data.fromCache ?? false);
-    });
-  }
-
-  async function runBulkImport() {
-    const lines = bulkInput
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-
-    if (lines.length === 0) {
-      setSearchError("Paste at least one company, domain, or market query for bulk import.");
-      return;
-    }
-
-    setSearchError(null);
-    setPitchError(null);
-    setDraftError(null);
-    setDraftSuccess(null);
-
-    const firstQuery = lines[0];
-    setQuery(firstQuery);
-    await runSearchWithQuery(firstQuery, Math.min(Math.max(lines.length, 10), 20));
-  }
-
-  async function runSearchWithQuery(nextQuery: string, nextLimit?: number) {
-    setSearchError(null);
-    setPitchError(null);
-    setDraftError(null);
-    setDraftSuccess(null);
-
-    const effectiveFilters = {
-      ...filters,
-      industryQuery: nextQuery,
-      limit: nextLimit ?? filters.limit
-    };
-
-    startSearchTransition(async () => {
-      const response = await fetch("/api/companies/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(effectiveFilters)
-      });
-
-      const data = (await response.json()) as CompanySearchResponse & { error?: string };
-
-      if (!response.ok) {
-        setSearchError(data.error || "Search failed.");
-        return;
-      }
-
-      setHasSearched(true);
-      setCreditEstimate(data.creditEstimate);
-      setCompanies(data.companies);
-      resetLeadResults();
-      setFromCache(data.fromCache ?? false);
-      setFilters((current) => ({ ...current, limit: effectiveFilters.limit }));
-    });
-  }
-
-  async function loadCompanyLeads(company: ProspectCompany) {
-    setSearchError(null);
-    setPitchError(null);
-    setDraftError(null);
-    setDraftSuccess(null);
-    setCompanyLoadingId(company.id);
-
-    try {
-      const response = await fetch("/api/leads/by-company", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          company,
-          filters: { ...filters, industryQuery: query },
-          searchQuery: query
-        })
-      });
-
-      const data = (await response.json()) as CompanyContactsResponse & { error?: string };
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to load company contacts.");
-      }
-
-      setSelectedCompany(data.company);
-      setLeads(data.leads);
-      setResearchByLeadId({});
-      setEmailLookupStateByLeadId({});
-      setEmailSourceByLeadId({});
-      setExpandedLeadId(null);
-      setLeadStatusById({});
-      setBulkResearchProgress(null);
-      setIsBulkResearching(false);
-      setFromCache(data.fromCache ?? false);
-    } catch (error) {
-      setSearchError(error instanceof Error ? error.message : "Failed to load company contacts.");
-    } finally {
-      setCompanyLoadingId(null);
     }
   }
 
@@ -549,10 +690,12 @@ export function OutreachDashboard() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ leadRecord: record, talkingPointsOverride, step, forceRefresh })
     });
+
     const data = (await response.json()) as { pitch?: GeneratedPitch; error?: string };
     if (!response.ok || !data.pitch) {
       throw new Error(data.error || "Pitch generation failed.");
     }
+
     return data.pitch;
   }
 
@@ -562,6 +705,12 @@ export function OutreachDashboard() {
         fetchPitch(record, talkingPoints, 2),
         fetchPitch(record, talkingPoints, 3)
       ]);
+
+      const next = {
+        followUp1: { subject: fu1.subject, body: fu1.body },
+        followUp2: { subject: fu2.subject, body: fu2.body }
+      };
+
       setResearchByLeadId((current) => {
         const existing = current[record.lead.id];
         if (!existing) return current;
@@ -569,27 +718,55 @@ export function OutreachDashboard() {
           ...current,
           [record.lead.id]: {
             ...existing,
-            followUp1: { subject: fu1.subject, body: fu1.body },
-            followUp2: { subject: fu2.subject, body: fu2.body }
+            ...next
           }
         };
       });
+
+      return next;
     } catch {
-      // Follow-up generation is non-critical
+      return null;
+    }
+  }
+
+  async function ensureLeadResearch(record: LeadRecord): Promise<ResearchState | null> {
+    const existingResearch = researchByLeadId[record.lead.id];
+    if (existingResearch && !isLowSignalPitch(existingResearch.pitch)) {
+      return existingResearch;
+    }
+
+    try {
+      const pitch = await fetchPitch(record, undefined, 1, Boolean(existingResearch));
+      const nextResearch: ResearchState = {
+        status: "researched",
+        pitch,
+        talkingPoints: pitch.talkingPoints,
+        researchedAt: new Date().toISOString()
+      };
+
+      setResearchByLeadId((current) => ({
+        ...current,
+        [record.lead.id]: nextResearch
+      }));
+      setExpandedLeadId(record.lead.id);
+      void generateFollowUps(record, pitch.talkingPoints);
+      return nextResearch;
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Pitch generation failed.");
+      return null;
     }
   }
 
   async function researchLead(record: LeadRecord, talkingPointsOverride?: string) {
-    setPitchError(null);
-    setDraftError(null);
-    setDraftSuccess(null);
+    setPageError(null);
+    setPageSuccess(null);
 
     startPitchTransition(async () => {
       try {
         const existingResearch = researchByLeadId[record.lead.id];
         const forceRefresh = Boolean(existingResearch && isLowSignalPitch(existingResearch.pitch));
         const pitch = await fetchPitch(record, talkingPointsOverride, 1, forceRefresh);
-        setExpandedLeadId(record.lead.id);
+
         setResearchByLeadId((current) => ({
           ...current,
           [record.lead.id]: {
@@ -599,29 +776,34 @@ export function OutreachDashboard() {
             researchedAt: new Date().toISOString()
           }
         }));
+        setExpandedLeadId(record.lead.id);
         void generateFollowUps(record, pitch.talkingPoints);
-      } catch (err) {
-        setPitchError(err instanceof Error ? err.message : "Pitch generation failed.");
+      } catch (error) {
+        setPageError(error instanceof Error ? error.message : "Pitch generation failed.");
       }
     });
   }
 
   async function researchAllLeads() {
-    const unresearched = leads.filter((record) => {
+    if (isBulkResearching || currentContacts.length === 0) return;
+
+    const unresearched = currentContacts.filter((record) => {
       const existingResearch = researchByLeadId[record.lead.id];
       return !existingResearch || isLowSignalPitch(existingResearch.pitch);
     });
-    if (unresearched.length === 0 || isBulkResearching) return;
+
+    if (unresearched.length === 0) return;
 
     setIsBulkResearching(true);
-    setPitchError(null);
     setBulkResearchProgress({ total: unresearched.length, completed: 0, active: true });
+    setPageError(null);
 
     for (const record of unresearched) {
       try {
         const existingResearch = researchByLeadId[record.lead.id];
         const forceRefresh = Boolean(existingResearch && isLowSignalPitch(existingResearch.pitch));
         const pitch = await fetchPitch(record, undefined, 1, forceRefresh);
+
         setResearchByLeadId((current) => ({
           ...current,
           [record.lead.id]: {
@@ -633,8 +815,9 @@ export function OutreachDashboard() {
         }));
         void generateFollowUps(record, pitch.talkingPoints);
       } catch {
-        // Continue with next lead if one fails
+        // Keep going so one miss does not block the rest.
       }
+
       setBulkResearchProgress((prev) =>
         prev ? { ...prev, completed: prev.completed + 1 } : null
       );
@@ -644,257 +827,502 @@ export function OutreachDashboard() {
     setIsBulkResearching(false);
   }
 
-  async function approveDraft(record: LeadRecord) {
-    setPitchError(null);
-    setDraftError(null);
-    setDraftSuccess(null);
-    setDraftPrepLeadId(record.lead.id);
+  async function queueLeadSequence(record: LeadRecord) {
+    const location = currentLocation;
+    if (!location) return;
 
-    try {
-      let draftRecord = record;
-      if (!draftRecord.lead.email) {
-        const enrichedRecord = await ensureLeadEmail(draftRecord);
-        if (!enrichedRecord) {
-          return;
-        }
-        draftRecord = enrichedRecord;
-      }
-
-      const research = await ensureLeadResearch(draftRecord);
-      if (!research) {
-        return;
-      }
-
-      const followUps: FollowUpRecord[] = [];
-      if (research.followUp1) followUps.push({ ...research.followUp1, state: "generated" });
-      if (research.followUp2) followUps.push({ ...research.followUp2, state: "generated" });
-
-      const nextDraft: DraftRecord = {
-        leadId: draftRecord.lead.id,
-        contactName: draftRecord.lead.name,
-        companyName: draftRecord.lead.companyName,
-        email: draftRecord.lead.email,
-        subject: research.pitch.subject,
-        body: research.pitch.body,
-        state: "generated",
-        followUps
-      };
-
-      setDrafts((current) => {
-        const withoutCurrent = current.filter((draft) => draft.leadId !== draftRecord.lead.id);
-        return [nextDraft, ...withoutCurrent];
-      });
-      setSelectedDraftLeadId(draftRecord.lead.id);
-      setDraftFilter("all");
-      setDraftSequenceTab(0);
-      setActivePage("drafts");
-    } finally {
-      setDraftPrepLeadId(null);
-    }
-  }
-
-  async function rebuildDraftFromTalkingPoints(record: LeadRecord) {
-    const research = researchByLeadId[record.lead.id];
-    if (!research) return;
-    await researchLead(record, research.talkingPoints);
-  }
-
-  function getCurrentDraftContent(draft: DraftRecord): { subject: string; body: string } {
-    if (draftSequenceTab === 1 && draft.followUps[0]) {
-      return { subject: draft.followUps[0].subject, body: draft.followUps[0].body };
-    }
-    if (draftSequenceTab === 2 && draft.followUps[1]) {
-      return { subject: draft.followUps[1].subject, body: draft.followUps[1].body };
-    }
-    return { subject: draft.subject, body: draft.body };
-  }
-
-  async function createGmailDraft() {
-    if (!selectedDraft) return;
-    if (!selectedDraft.email) {
-      setDraftError("This lead doesn't have an email address yet, so Gmail draft creation is unavailable.");
-      return;
-    }
-
-    const { subject, body } = getCurrentDraftContent(selectedDraft);
-    setDraftError(null);
-    setDraftSuccess(null);
+    setPageError(null);
+    setPageSuccess(null);
 
     startDraftTransition(async () => {
-      const response = await fetch("/api/gmail/drafts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to: selectedDraft.email, subject, body })
-      });
+      try {
+        let draftRecord = record;
+        if (!draftRecord.lead.email) {
+          const enrichedRecord = await ensureLeadEmail(draftRecord);
+          if (!enrichedRecord?.lead.email) {
+            throw new Error("We still don't have an email for this contact, so the sequence can't be queued yet.");
+          }
+          draftRecord = enrichedRecord;
+        }
 
-      const data = (await response.json()) as { gmailUrl?: string; error?: string };
+        const research = await ensureLeadResearch(draftRecord);
+        if (!research) {
+          throw new Error("Research is required before queuing the sequence.");
+        }
 
-      if (!response.ok) {
-        setDraftError(data.error || "Draft creation failed.");
-        return;
+        let followUp1 = research.followUp1;
+        let followUp2 = research.followUp2;
+
+        if (!followUp1 || !followUp2) {
+          const generated = await generateFollowUps(draftRecord, research.talkingPoints);
+          followUp1 = generated?.followUp1;
+          followUp2 = generated?.followUp2;
+        }
+
+        const sequence = [
+          {
+            locationId: location.id,
+            contactName: draftRecord.lead.name,
+            contactEmail: draftRecord.lead.email,
+            contactTitle: draftRecord.lead.title,
+            companyName: draftRecord.lead.companyName,
+            locationType: location.locationType,
+            sequenceStep: 1,
+            subject: research.pitch.subject,
+            body: research.pitch.body,
+            status: "generated" as const
+          }
+        ];
+
+        if (followUp1) {
+          sequence.push({
+            locationId: location.id,
+            contactName: draftRecord.lead.name,
+            contactEmail: draftRecord.lead.email,
+            contactTitle: draftRecord.lead.title,
+            companyName: draftRecord.lead.companyName,
+            locationType: location.locationType,
+            sequenceStep: 2,
+            subject: followUp1.subject,
+            body: followUp1.body,
+            status: "generated" as const
+          });
+        }
+
+        if (followUp2) {
+          sequence.push({
+            locationId: location.id,
+            contactName: draftRecord.lead.name,
+            contactEmail: draftRecord.lead.email,
+            contactTitle: draftRecord.lead.title,
+            companyName: draftRecord.lead.companyName,
+            locationType: location.locationType,
+            sequenceStep: 3,
+            subject: followUp2.subject,
+            body: followUp2.body,
+            status: "generated" as const
+          });
+        }
+
+        const response = await fetch("/api/emails", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            leadId: draftRecord.lead.id,
+            emails: sequence
+          })
+        });
+
+        const data = (await response.json()) as { emails?: StoredEmail[]; error?: string };
+        if (!response.ok || !data.emails) {
+          throw new Error(data.error || "Failed to save sequence.");
+        }
+
+        await Promise.all([loadEmails(), loadDashboard(), openLocation(location.id)]);
+        setSelectedEmailId(data.emails[0]?.id ?? null);
+        setActivePage("emails");
+        setPageSuccess(`3-step outreach sequence queued for ${draftRecord.lead.name}.`);
+      } catch (error) {
+        setPageError(error instanceof Error ? error.message : "Failed to queue sequence.");
       }
-
-      setDrafts((current) =>
-        current.map((draft) => {
-          if (draft.leadId !== selectedDraft.leadId) return draft;
-          if (draftSequenceTab === 0) return { ...draft, state: "drafted" };
-          const idx = draftSequenceTab - 1;
-          const newFollowUps = [...draft.followUps];
-          if (newFollowUps[idx]) newFollowUps[idx] = { ...newFollowUps[idx]!, state: "drafted" };
-          return { ...draft, followUps: newFollowUps };
-        })
-      );
-      setDraftSuccess(data.gmailUrl || "https://mail.google.com/mail/u/0/#drafts");
-      await refreshGmailStatus();
     });
   }
 
-  async function createAllGmailDrafts() {
-    if (!selectedDraft) return;
-    if (!selectedDraft.email) {
-      setDraftError("This lead doesn't have an email address yet, so Gmail draft creation is unavailable.");
+  async function saveLocationNotes() {
+    if (!currentLocation) return;
+
+    startSaveTransition(async () => {
+      try {
+        const response = await fetch(`/api/locations/${currentLocation.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ notes: notesDraft })
+        });
+
+        const data = (await response.json()) as { location?: SavedLocation; error?: string };
+        if (!response.ok || !data.location) {
+          throw new Error(data.error || "Failed to save notes.");
+        }
+
+        await Promise.all([openLocation(currentLocation.id), loadLocations(), loadDashboard()]);
+        setPageSuccess("Notes saved.");
+      } catch (error) {
+        setPageError(error instanceof Error ? error.message : "Failed to save notes.");
+      }
+    });
+  }
+
+  async function updateCurrentLocationField(
+    field: "pipelineStage" | "locationType" | "pitchType",
+    value: PipelineStage | LocationType | PitchType
+  ) {
+    if (!currentLocation) return;
+
+    try {
+      const response = await fetch(`/api/locations/${currentLocation.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [field]: value })
+      });
+
+      const data = (await response.json()) as { location?: SavedLocation; error?: string };
+      if (!response.ok || !data.location) {
+        throw new Error(data.error || "Failed to update location.");
+      }
+
+      await Promise.all([openLocation(currentLocation.id), loadLocations(), loadDashboard()]);
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Failed to update location.");
+    }
+  }
+
+  async function deleteLocation(locationId: string) {
+    try {
+      const response = await fetch(`/api/locations/${locationId}`, {
+        method: "DELETE"
+      });
+
+      const data = (await response.json()) as { ok?: boolean; error?: string };
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || "Failed to delete location.");
+      }
+
+      if (selectedLocationId === locationId) {
+        setSelectedLocationId(null);
+        setLocationDetail(null);
+        setExpandedLeadId(null);
+      }
+
+      await Promise.all([loadLocations(), loadDashboard(), loadEmails()]);
+      setPageSuccess("Location removed from the pipeline.");
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Failed to delete location.");
+    }
+  }
+
+  async function saveSelectedEmail() {
+    if (!selectedEmail) return;
+
+    setPageError(null);
+    setPageSuccess(null);
+
+    startSaveTransition(async () => {
+      try {
+        const response = await fetch(`/api/emails/${selectedEmail.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(emailEditor)
+        });
+
+        const data = (await response.json()) as { email?: StoredEmail; error?: string };
+        if (!response.ok || !data.email) {
+          throw new Error(data.error || "Failed to save email.");
+        }
+
+        await Promise.all([loadEmails(), currentLocation ? openLocation(currentLocation.id) : Promise.resolve()]);
+        setPageSuccess("Email updated.");
+      } catch (error) {
+        setPageError(error instanceof Error ? error.message : "Failed to save email.");
+      }
+    });
+  }
+
+  async function createGmailDraftForSelectedEmail() {
+    if (!selectedEmail) return;
+    if (!selectedEmail.contactEmail) {
+      setPageError("This sequence does not have a contact email yet, so Gmail draft creation is unavailable.");
       return;
     }
-    setDraftError(null);
-    setDraftSuccess(null);
 
-    const emailsToCreate = [
-      { subject: selectedDraft.subject, body: selectedDraft.body },
-      ...selectedDraft.followUps.map((fu) => ({ subject: fu.subject, body: fu.body }))
-    ];
+    setPageError(null);
+    setPageSuccess(null);
 
     startDraftTransition(async () => {
-      let lastUrl: string | null = null;
-      for (const email of emailsToCreate) {
+      try {
         const response = await fetch("/api/gmail/drafts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ to: selectedDraft.email, subject: email.subject, body: email.body })
+          body: JSON.stringify({
+            to: selectedEmail.contactEmail,
+            subject: emailEditor.subject,
+            body: emailEditor.body
+          })
         });
+
         const data = (await response.json()) as { gmailUrl?: string; error?: string };
         if (!response.ok) {
-          setDraftError(data.error || "Draft creation failed.");
-          return;
+          throw new Error(data.error || "Failed to create Gmail draft.");
         }
-        lastUrl = data.gmailUrl || null;
+
+        const patchResponse = await fetch(`/api/emails/${selectedEmail.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            subject: emailEditor.subject,
+            body: emailEditor.body,
+            status: "approved",
+            gmailDraftUrl: data.gmailUrl || "https://mail.google.com/mail/u/0/#drafts"
+          })
+        });
+
+        const patchData = (await patchResponse.json()) as { email?: StoredEmail; error?: string };
+        if (!patchResponse.ok || !patchData.email) {
+          throw new Error(patchData.error || "Failed to update email after draft creation.");
+        }
+
+        await Promise.all([loadEmails(), refreshGmailStatus(), currentLocation ? openLocation(currentLocation.id) : Promise.resolve()]);
+        setPageSuccess("Draft created in Gmail.");
+      } catch (error) {
+        setPageError(error instanceof Error ? error.message : "Failed to create Gmail draft.");
       }
-      setDrafts((current) =>
-        current.map((draft) => {
-          if (draft.leadId !== selectedDraft.leadId) return draft;
-          return {
-            ...draft,
-            state: "drafted",
-            followUps: draft.followUps.map((fu) => ({ ...fu, state: "drafted" as const }))
-          };
-        })
-      );
-      setDraftSuccess(lastUrl || "https://mail.google.com/mail/u/0/#drafts");
-      await refreshGmailStatus();
     });
   }
 
-  function updateDraft(field: "subject" | "body", value: string) {
-    if (!selectedDraft) return;
+  async function saveToneSettings() {
+    setPageError(null);
+    setPageSuccess(null);
 
-    setDrafts((current) =>
-      current.map((draft) => {
-        if (draft.leadId !== selectedDraft.leadId) return draft;
-        if (draftSequenceTab === 0) return { ...draft, [field]: value };
-        const idx = draftSequenceTab - 1;
-        const newFollowUps = [...draft.followUps];
-        if (newFollowUps[idx]) newFollowUps[idx] = { ...newFollowUps[idx]!, [field]: value };
-        return { ...draft, followUps: newFollowUps };
-      })
-    );
+    startSaveTransition(async () => {
+      try {
+        const response = await fetch("/api/tone", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(toneSettings)
+        });
+
+        const data = (await response.json()) as { tone?: ToneSettings; error?: string };
+        if (!response.ok || !data.tone) {
+          throw new Error(data.error || "Failed to save tone settings.");
+        }
+
+        setToneSettings(data.tone);
+        setPageSuccess("Tone settings saved. New research runs will use this voice.");
+      } catch (error) {
+        setPageError(error instanceof Error ? error.message : "Failed to save tone settings.");
+      }
+    });
   }
 
   function updateTalkingPoints(leadId: string, value: string) {
     setResearchByLeadId((current) => {
       const research = current[leadId];
       if (!research) return current;
-      return { ...current, [leadId]: { ...research, talkingPoints: value } };
+      return {
+        ...current,
+        [leadId]: {
+          ...research,
+          talkingPoints: value
+        }
+      };
     });
-  }
-
-  function setLeadStatus(leadId: string, status: LeadContactStatus) {
-    setLeadStatusById((current) => ({ ...current, [leadId]: status }));
   }
 
   function downloadCSV(filename: string, rows: Array<Array<string | number>>) {
     const csv = rows
       .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
       .join("\n");
+
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.click();
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
     URL.revokeObjectURL(url);
   }
 
-  function exportLeadsCSV() {
-    const headers = [
-      "Name", "Email", "Title", "Company", "Industry",
-      "Employees", "City", "Zone", "Priority Score", "Contact Status"
+  function exportEmailsCSV() {
+    const rows = [
+      ["Company", "Contact", "Email", "Title", "Step", "Status", "Subject", "Body"],
+      ...filteredEmails(emails, emailFilter, emailSearch).map((email) => [
+        email.companyName || "",
+        email.contactName || "",
+        email.contactEmail || "",
+        email.contactTitle || "",
+        email.sequenceStep,
+        email.status,
+        email.subject,
+        email.body
+      ])
     ];
-    const rows = leads.map((r) => [
-      r.lead.name,
-      r.lead.email,
-      r.lead.title,
-      r.lead.companyName,
-      r.company.industry || "",
-      r.company.employeeCount || "",
-      r.company.hqCity || "",
-      r.company.deliveryZone,
-      r.priorityScore,
-      CONTACT_STATUS_LABELS[leadStatusById[r.lead.id] || "new"]
-    ]);
-    downloadCSV("ff_leads.csv", [headers, ...rows]);
+
+    downloadCSV("ff_emails.csv", rows);
   }
 
-  function exportDraftsCSV() {
-    const headers = ["Contact", "Company", "Email", "Sequence", "Subject", "Body", "Draft Status"];
-    const rows: Array<Array<string>> = [];
-    for (const draft of drafts) {
-      rows.push([draft.contactName, draft.companyName, draft.email, "Email 1", draft.subject, draft.body, draft.state]);
-      draft.followUps.forEach((fu, i) => {
-        rows.push([draft.contactName, draft.companyName, draft.email, `Follow-up ${i + 1}`, fu.subject, fu.body, fu.state]);
-      });
+  function exportEmailContactsCSV() {
+    const seen = new Set<string>();
+    const rows: Array<Array<string | number>> = [["Company", "Contact", "Email", "Title"]];
+
+    for (const email of filteredEmails(emails, emailFilter, emailSearch)) {
+      const key = `${email.companyName}-${email.contactEmail}`;
+      if (!email.contactEmail || seen.has(key)) continue;
+      seen.add(key);
+      rows.push([
+        email.companyName || "",
+        email.contactName || "",
+        email.contactEmail || "",
+        email.contactTitle || ""
+      ]);
     }
-    downloadCSV("ff_drafts.csv", [headers, ...rows]);
+
+    downloadCSV("ff_email_contacts.csv", rows);
   }
 
-  function renderSearchPage() {
-    const unresearchedCount = leads.filter((r) => !researchByLeadId[r.lead.id]).length;
-    const resultsCountLabel = selectedCompany
-      ? `${leads.length} contacts`
-      : `${companies.length} companies`;
+  function renderFeedback() {
+    return (
+      <>
+        {pageError ? <p className="error">{pageError}</p> : null}
+        {pageSuccess ? <p className="success">{pageSuccess}</p> : null}
+      </>
+    );
+  }
+
+  function renderDashboardPage() {
+    const stageRows = (Object.keys(PIPELINE_STAGE_LABELS) as PipelineStage[]).map((stage) => ({
+      label: PIPELINE_STAGE_LABELS[stage],
+      value: dashboardStats.pipelineByStage[stage]
+    }));
+
+    const locationTypeRows = (Object.keys(LOCATION_TYPE_LABELS) as LocationType[]).map((type) => ({
+      label: LOCATION_TYPE_LABELS[type],
+      value: dashboardStats.byLocationType[type]
+    }));
 
     return (
       <>
         <header className="pageHeader">
           <div>
-            <h1>Farmer&apos;s Fridge Lead Gen Hub</h1>
-            <p>Search companies first, then load the right workplace contacts inside the company you choose and move them into personalized outreach.</p>
+            <h1>Dashboard</h1>
+            <p>Farmers Fridge placement pipeline overview, from saved locations to drafted outreach.</p>
+          </div>
+          <div className="inlineActions">
+            <button className="primaryButton" type="button" onClick={() => setActivePage("contacts")}>
+              <Search size={16} />
+              Find Contacts
+            </button>
+          </div>
+        </header>
+
+        {renderFeedback()}
+
+        <section className="dashboardGrid">
+          <article className="statCard">
+            <span>Locations</span>
+            <strong>{dashboardStats.locationsCount}</strong>
+          </article>
+          <article className="statCard">
+            <span>Emails</span>
+            <strong>{dashboardStats.draftsCount}</strong>
+          </article>
+          <article className="statCard">
+            <span>Won</span>
+            <strong>{dashboardStats.wonCount}</strong>
+          </article>
+          <article className="statCard">
+            <span>Meetings</span>
+            <strong>{dashboardStats.pipelineByStage.meeting}</strong>
+          </article>
+        </section>
+
+        <section className="dashboardPanels">
+          <article className="dashboardPanel">
+            <h2>Pipeline</h2>
+            <div className="summaryList">
+              {stageRows.map((row) => (
+                <div key={row.label} className="summaryRow">
+                  <span>{row.label}</span>
+                  <strong>{row.value}</strong>
+                </div>
+              ))}
+            </div>
+          </article>
+
+          <article className="dashboardPanel">
+            <h2>By Location Type</h2>
+            <div className="summaryList">
+              {locationTypeRows.map((row) => (
+                <div key={row.label} className="summaryRow">
+                  <span>{row.label}</span>
+                  <strong>{row.value}</strong>
+                </div>
+              ))}
+            </div>
+          </article>
+        </section>
+
+        <section className="resultsPanel sectionCard">
+          <div className="sectionHeader">
+            <div>
+              <h2>Recent Locations</h2>
+              <p>Quickly jump back into the places already in your pipeline.</p>
+            </div>
+          </div>
+
+          {recentLocations.length > 0 ? (
+            <div className="locationGrid">
+              {recentLocations.map((location) => (
+                <article key={location.id} className="locationCard">
+                  <div className="locationCardBody">
+                    <div className="locationCardTop">
+                      <div>
+                        <h3>{location.companyName}</h3>
+                        <p>{location.companyDomain || "No domain found"}</p>
+                      </div>
+                      <span className="statusPill">{PIPELINE_STAGE_LABELS[location.pipelineStage]}</span>
+                    </div>
+                    <div className="locationMeta">
+                      <span>{LOCATION_TYPE_LABELS[location.locationType]}</span>
+                      {location.hqCity || location.hqState ? <span>{formatCompanyMeta(location)}</span> : null}
+                    </div>
+                    <div className="locationCounts">
+                      <span>{location.contactsCount} contacts</span>
+                      <span>{location.emailsCount} emails</span>
+                    </div>
+                  </div>
+                  <button className="iconButton" type="button" onClick={() => void openLocation(location.id)}>
+                    <ArrowRight size={16} />
+                  </button>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="emptyStateTable">
+              <Building2 size={34} />
+              <p>No saved locations yet. Start in Find Contacts and add your first target.</p>
+            </div>
+          )}
+        </section>
+      </>
+    );
+  }
+
+  function renderContactsHome() {
+    return (
+      <>
+        <header className="pageHeader">
+          <div>
+            <h1>Find Contacts</h1>
+            <p>Search by domain, company name, or a target market, then save the best-fit locations into the Farmers Fridge pipeline.</p>
           </div>
           <div className="pagePills">
             <button
-              type="button"
               className={`topPill ${searchMode === "search" ? "active" : ""}`}
+              type="button"
               onClick={() => setSearchMode("search")}
             >
               Search
             </button>
             <button
-              type="button"
               className={`topPill ${searchMode === "bulk" ? "active" : ""}`}
+              type="button"
               onClick={() => setSearchMode("bulk")}
             >
               Bulk Import
             </button>
           </div>
         </header>
+
+        {renderFeedback()}
 
         <section className="searchComposer">
           {searchMode === "search" ? (
@@ -903,7 +1331,7 @@ export function OutreachDashboard() {
                 <input
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Try: Rush Hospital, law firm NYC, or office parks in New Jersey"
+                  placeholder="Enter domain (stripe.com) or target market (e.g. hospitals in Chicago)"
                 />
                 <button className="primaryButton" type="button" onClick={() => void runSearch()} disabled={searchPending}>
                   <Search size={16} />
@@ -911,7 +1339,7 @@ export function OutreachDashboard() {
                 </button>
               </div>
               <p className="helperText">
-                Search by company name, company type, or geography. We&apos;ll show matching companies first, then you can load the best-fit contacts inside one company.
+                Search company-first, then save the best target into your pipeline and load the right contacts inside it.
               </p>
             </>
           ) : (
@@ -920,7 +1348,7 @@ export function OutreachDashboard() {
                 <textarea
                   value={bulkInput}
                   onChange={(event) => setBulkInput(event.target.value)}
-                  placeholder={"Paste one company or target per line\nNorthwestern Medicine\nJLL Chicago\nNewark office parks"}
+                  placeholder={"Paste one company or market query per line\nNorthwestern Medicine\nJLL Chicago\nO'Hare airport vendors"}
                 />
                 <button className="primaryButton" type="button" onClick={() => void runBulkImport()} disabled={searchPending}>
                   <Upload size={16} />
@@ -928,7 +1356,7 @@ export function OutreachDashboard() {
                 </button>
               </div>
               <p className="helperText">
-                Bulk import helps you seed the pipeline quickly. Start with target companies, campuses, hospital systems, or office portfolios.
+                Use bulk import to quickly seed a region, employer list, or account plan.
               </p>
             </>
           )}
@@ -937,7 +1365,7 @@ export function OutreachDashboard() {
         <section className="filterBar">
           <div className="filterBarRow">
             <div className="filterField filterField--role">
-              <label>Target role</label>
+              <label>Target Role</label>
               <div className="multiCheck">
                 {Object.entries(PERSONA_LABELS).map(([value, label]) => {
                   const personaValue = value as SearchFilters["personas"][number];
@@ -966,7 +1394,7 @@ export function OutreachDashboard() {
             </div>
             {filters.personas.includes("custom") ? (
               <div className="filterField wide">
-                <label>Custom job title</label>
+                <label>Custom Job Title</label>
                 <input
                   type="text"
                   value={filters.customPersona || ""}
@@ -980,9 +1408,8 @@ export function OutreachDashboard() {
           </div>
 
           <div className="filterBarRow">
-            <span className="resultsCount">{resultsCountLabel}</span>
             <div className="filterField">
-              <label>{selectedCompany ? "Contact count" : "Company count"}</label>
+              <label>Company Limit</label>
               <input
                 type="text"
                 inputMode="numeric"
@@ -996,17 +1423,16 @@ export function OutreachDashboard() {
                   setFilters((current) => ({ ...current, limit: nextLimit }));
                   setLimitInput(String(nextLimit));
                 }}
-                placeholder="10"
               />
             </div>
             <div className="filterField">
-              <label>Minimum employees</label>
+              <label>Minimum Employees</label>
               <input
                 type="number"
-                min={200}
+                min={50}
                 value={filters.employeeMin}
                 onChange={(event) =>
-                  setFilters((current) => ({ ...current, employeeMin: Number(event.target.value) || 200 }))
+                  setFilters((current) => ({ ...current, employeeMin: Number(event.target.value) || 50 }))
                 }
               />
             </div>
@@ -1014,651 +1440,683 @@ export function OutreachDashboard() {
               <label>States</label>
               <div className="statesControls">
                 <div className="statesActions">
-                  <button
-                    type="button"
-                    className="statesBtn"
-                    onClick={() => setFilters((c) => ({ ...c, states: [...US_STATES] }))}
-                  >All</button>
-                  <button
-                    type="button"
-                    className="statesBtn"
-                    onClick={() => setFilters((c) => ({ ...c, states: [] }))}
-                  >Clear</button>
-                  <span className="statesCount">
-                    {filters.states.length === 0
-                      ? "Nationwide"
-                      : filters.states.length === US_STATES.length
-                      ? "All states"
-                      : `${filters.states.length} selected`}
-                  </span>
+                  <button className="statesBtn" type="button" onClick={() => setFilters((c) => ({ ...c, states: [...US_STATES] }))}>
+                    All
+                  </button>
+                  <button className="statesBtn" type="button" onClick={() => setFilters((c) => ({ ...c, states: [] }))}>
+                    Clear
+                  </button>
                 </div>
                 <select
                   multiple
                   className="statesSelect"
                   value={filters.states}
-                  onChange={(e) => {
-                    const selected = [...e.target.selectedOptions].map((o) => o.value);
-                    setFilters((c) => ({ ...c, states: selected }));
+                  onChange={(event) => {
+                    const selected = [...event.target.selectedOptions].map((option) => option.value);
+                    setFilters((current) => ({ ...current, states: selected }));
                   }}
                 >
                   {US_STATES.map((state) => (
-                    <option key={state} value={state}>{state}</option>
+                    <option key={state} value={state}>
+                      {state}
+                    </option>
                   ))}
                 </select>
               </div>
             </div>
           </div>
-          <div className={`ffGuidance ${filters.employeeMin < 150 ? "ffGuidance--csuite" : "ffGuidance--ops"}`}>
-            <span className="ffGuidanceLabel">FF Targeting Rule</span>
-            {filters.employeeMin < 150 ? (
-              <>
-                <strong>Under 150 employees → C-Suite</strong>
-                <span>At smaller companies, decision-makers are founders, CEOs, and COOs — not HR or office managers.</span>
-                {!filters.personas.includes("csuite") && (
-                  <button
-                    type="button"
-                    className="ffGuidanceApply"
-                    onClick={() => setFilters((c) => ({ ...c, personas: ["csuite"] }))}
-                  >
-                    Switch to C-Suite
-                  </button>
-                )}
-              </>
-            ) : (
-              <>
-                <strong>150+ employees → HR / Facilities / Office Manager</strong>
-                <span>Larger companies have dedicated operations roles that own workplace decisions.</span>
-                {filters.personas.includes("csuite") && (
-                  <button
-                    type="button"
-                    className="ffGuidanceApply"
-                    onClick={() => setFilters((c) => ({ ...c, personas: ["office_manager", "facilities_director"] }))}
-                  >
-                    Switch to Ops roles
-                  </button>
-                )}
-              </>
-            )}
-          </div>
         </section>
 
         {creditEstimate ? (
           <section className="creditBanner">
-            <strong>Estimated Apollo search flow: {creditEstimate.totalEstimatedOperations} operations</strong>
+            <strong>Estimated Apollo flow: {creditEstimate.totalEstimatedOperations} operations</strong>
             <span>{creditEstimate.note}</span>
           </section>
         ) : null}
 
-        {fromCache && selectedCompany && leads.length > 0 ? (
-          <div className="cacheBanner">
-            <span>Showing cached contacts for this company.</span>
-            <button className="cacheRefreshBtn" type="button" onClick={() => void runSearch(true)} disabled={searchPending}>
-              <RefreshCw size={13} /> Refresh from Apollo
-            </button>
-          </div>
-        ) : null}
-
-        {searchError ? <p className="error">{searchError}</p> : null}
-        {pitchError ? <p className="error">{pitchError}</p> : null}
-        {draftError ? <p className="error">{draftError}</p> : null}
-
-        <section className="resultsPanel">
-          {!selectedCompany ? (
-            companies.length === 0 ? (
-              <div className="emptyStateTable">
-                <Building2 size={34} />
-                <p>
-                  {hasSearched
-                    ? `No Apollo companies came back for "${query}". Try a broader market, company name, or location.`
-                    : "Search for an office, hospital, university, law firm, or employer footprint to start building your outreach list."}
-                </p>
+        {companies.length > 0 ? (
+          <section className="resultsPanel sectionCard">
+            <div className="sectionHeader">
+              <div>
+                <h2>Search Results</h2>
+                <p>{companies.length} company matches from Apollo.</p>
               </div>
-            ) : (
-              <div className="tableWrap">
-                <div className="tableHeader tableHeader--companies">
-                  <span>Company</span>
-                  <span>Location</span>
-                  <span>Industry</span>
-                  <span>Employees</span>
-                  <span>Fit</span>
-                  <span>Actions</span>
-                </div>
-
-                {companies.map((company) => {
-                  const location = [company.company.hqCity, company.company.hqState].filter(Boolean).join(", ");
-
-                  return (
-                    <div key={company.id} className="tableRowGroup">
-                      <div className="tableRow tableRow--companies">
-                        <div className="cell primaryCell">
-                          <div className="nameBlock">
-                            <strong>{company.name}</strong>
-                            <span>{company.domain || "No domain found"}</span>
-                          </div>
-                        </div>
-                        <div className="cell">{location || "Location unavailable"}</div>
-                        <div className="cell">{company.company.industry || "Industry unavailable"}</div>
-                        <div className="cell">{company.company.employeeCount?.toLocaleString() || "Unknown"}</div>
-                        <div className="cell">
-                          <span className="confidencePill">
-                            {company.company.deliveryZone !== "Other" ? "Zone Match" : "General Fit"}
-                          </span>
-                        </div>
-                        <div className="cell actionCell">
-                          <button
-                            className="primaryButton"
-                            type="button"
-                            onClick={() => void loadCompanyLeads(company)}
-                            disabled={companyLoadingId === company.id}
-                          >
-                            <Search size={16} />
-                            {companyLoadingId === company.id ? "Loading..." : "Find Contacts"}
-                          </button>
-                        </div>
+            </div>
+            <div className="locationGrid">
+              {companies.map((company) => (
+                <article key={company.id} className="locationCard">
+                  <div className="locationCardBody">
+                    <div className="locationCardTop">
+                      <div>
+                        <h3>{company.name}</h3>
+                        <p>{company.domain || "No domain found"}</p>
                       </div>
+                      <span className="confidencePill">
+                        {company.company.deliveryZone !== "Other" ? "Zone Match" : "General Fit"}
+                      </span>
                     </div>
-                  );
-                })}
-              </div>
-            )
-          ) : leads.length === 0 ? (
+                    <div className="locationMeta">
+                      <span>{company.company.industry || "Industry unavailable"}</span>
+                      <span>{formatCompanyMeta(company.company) || "Location unavailable"}</span>
+                    </div>
+                    <div className="cardActionRow">
+                      <button className="secondaryButton" type="button" onClick={() => void saveCompanyToPipeline(company)}>
+                        Save to Pipeline
+                      </button>
+                      <button className="primaryButton" type="button" onClick={() => void handleOpenCompany(company)}>
+                        <Search size={15} />
+                        Open
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : hasSearched ? (
+          <section className="resultsPanel">
             <div className="emptyStateTable">
               <Building2 size={34} />
-              <p>
-                No matching contacts came back for {selectedCompany.name}. Try another company, broaden the role filter, or lower the minimum employee count.
-              </p>
-              <button
-                className="secondaryButton"
-                type="button"
-                onClick={() => {
-                  setSelectedCompany(null);
-                  setLeads([]);
-                  setExpandedLeadId(null);
-                }}
-              >
-                Back to Companies
-              </button>
+              <p>No companies came back for "{query}". Try a broader market, location, or company name.</p>
+            </div>
+          </section>
+        ) : null}
+
+        <section className="resultsPanel sectionCard">
+          <div className="sectionHeader sectionHeader--filters">
+            <div>
+              <h2>Pipeline Locations</h2>
+              <p>{visibleLocations.length} saved locations.</p>
+            </div>
+            <div className="sectionControls">
+              <input
+                className="compactInput"
+                value={locationQuery}
+                onChange={(event) => setLocationQuery(event.target.value)}
+                placeholder="Filter locations..."
+              />
+              <select value={locationTypeFilter} onChange={(event) => setLocationTypeFilter(event.target.value as LocationType | "all")}>
+                <option value="all">All Types</option>
+                {(Object.keys(LOCATION_TYPE_LABELS) as LocationType[]).map((type) => (
+                  <option key={type} value={type}>
+                    {LOCATION_TYPE_LABELS[type]}
+                  </option>
+                ))}
+              </select>
+              <select value={pipelineStageFilter} onChange={(event) => setPipelineStageFilter(event.target.value as PipelineStage | "all")}>
+                <option value="all">All Stages</option>
+                {(Object.keys(PIPELINE_STAGE_LABELS) as PipelineStage[]).map((stage) => (
+                  <option key={stage} value={stage}>
+                    {PIPELINE_STAGE_LABELS[stage]}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {visibleLocations.length > 0 ? (
+            <div className="locationGrid">
+              {visibleLocations.map((location) => (
+                <article key={location.id} className="locationCard">
+                  <div className="locationCardBody">
+                    <div className="locationCardTop">
+                      <div>
+                        <h3>{location.companyName}</h3>
+                        <p>{location.companyDomain || "No domain found"}</p>
+                      </div>
+                      <button className="iconButton" type="button" onClick={() => void deleteLocation(location.id)}>
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                    <div className="locationMeta">
+                      <span>{LOCATION_TYPE_LABELS[location.locationType]}</span>
+                      {formatCompanyMeta(location) ? <span>{formatCompanyMeta(location)}</span> : null}
+                    </div>
+                    <div className="locationCounts">
+                      <span>{location.contactsCount} contacts</span>
+                      <span>{location.emailsCount} emails</span>
+                    </div>
+                    <div className="cardActionRow">
+                      <span className="statusPill">{PIPELINE_STAGE_LABELS[location.pipelineStage]}</span>
+                      <button className="iconButton" type="button" onClick={() => void openLocation(location.id)} disabled={loadingLocationId === location.id}>
+                        <ArrowRight size={16} />
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              ))}
             </div>
           ) : (
-            <>
-              <section className="companySelectionBanner">
-                <div>
-                  <strong>{selectedCompany.name}</strong>
-                  <span>
-                    {[
-                      selectedCompany.company.industry,
-                      selectedCompany.company.hqCity,
-                      selectedCompany.company.hqState
-                    ].filter(Boolean).join(" · ") || "Company selected"}
-                  </span>
-                </div>
-                <div className="inlineActions">
-                  {selectedCompany.domain ? (
-                    <a
-                      className="secondaryLink"
-                      href={`https://${selectedCompany.domain}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Visit Site <ArrowUpRight size={14} />
-                    </a>
-                  ) : null}
-                  <button
-                    className="secondaryButton"
-                    type="button"
-                    onClick={() => {
-                      setSelectedCompany(null);
-                      setLeads([]);
-                      setExpandedLeadId(null);
-                    }}
-                  >
-                    Back to Companies
-                  </button>
-                </div>
-              </section>
-
-              <div className="tableWrap">
-                <div className="tableToolbar">
-                  <div className="tableToolbarLeft">
-                    <button
-                      className="secondaryButton"
-                      type="button"
-                      onClick={() => void researchAllLeads()}
-                      disabled={isBulkResearching || unresearchedCount === 0}
-                      title={unresearchedCount === 0 ? "All leads already researched" : `Research ${unresearchedCount} remaining leads`}
-                    >
-                      <Zap size={15} />
-                      {isBulkResearching ? "Researching..." : `Research All${unresearchedCount > 0 ? ` (${unresearchedCount})` : ""}`}
-                    </button>
-                    {bulkResearchProgress ? (
-                      <div className="bulkProgressWrap">
-                        <div className="bulkProgressBar">
-                          <div
-                            className="bulkProgressFill"
-                            style={{ width: `${(bulkResearchProgress.completed / bulkResearchProgress.total) * 100}%` }}
-                          />
-                        </div>
-                        <span className="bulkProgressLabel">
-                          {bulkResearchProgress.completed}/{bulkResearchProgress.total}
-                          {bulkResearchProgress.active ? " — researching..." : " complete"}
-                        </span>
-                      </div>
-                    ) : null}
-                  </div>
-                  <button
-                    className="secondaryButton"
-                    type="button"
-                    onClick={exportLeadsCSV}
-                  >
-                    <Download size={15} />
-                    Export CSV
-                  </button>
-                </div>
-
-                <div className="tableHeader">
-                  <span>Name</span>
-                  <span>Email</span>
-                  <span>Position</span>
-                  <span>Priority</span>
-                  <span>Status</span>
-                  <span>Actions</span>
-                </div>
-
-                {leads.map((record) => {
-                  const research = researchByLeadId[record.lead.id];
-                  const isExpanded = expandedLeadId === record.lead.id;
-                  const contactStatus = leadStatusById[record.lead.id] || "new";
-                  const isResearched = research?.status === "researched";
-                  const canDraft = Boolean(record.lead.email);
-                  const isFindingEmail = emailLookupLeadId === record.lead.id;
-                  const isPreparingDraft = draftPrepLeadId === record.lead.id;
-
-                  return (
-                    <div key={record.lead.id} className="tableRowGroup">
-                      <div className="tableRow">
-                        <div className="cell primaryCell">
-                          <div className="nameBlock">
-                            <strong>{record.lead.name}</strong>
-                            <span>{record.lead.companyName}</span>
-                            {isResearched && research?.researchedAt && (
-                              <span className="researchedBadge" title={`Researched on ${new Date(research.researchedAt).toLocaleString()}`}>
-                                ✓ Researched {new Date(research.researchedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <div className="cell mono">
-                          {getEmailDisplay(record)}
-                          {record.lead.email && emailSourceByLeadId[record.lead.id] ? (
-                            <span className={`sourceBadge sourceBadge--${emailSourceByLeadId[record.lead.id]}`}>
-                              {emailSourceByLeadId[record.lead.id] === "apollo"
-                                ? "via Apollo"
-                                : emailSourceByLeadId[record.lead.id] === "tomba"
-                                  ? "via Tomba"
-                                  : "existing"}
-                            </span>
-                          ) : null}
-                        </div>
-                        <div className="cell">{record.lead.title}</div>
-                        <div className="cell">
-                          <span className="confidencePill">
-                            {record.company.deliveryZone !== "Other" ? "Zone Match" : "General Fit"}
-                          </span>
-                        </div>
-                        <div className="cell">
-                          <select
-                            className={`statusSelect statusSelect--${contactStatus}`}
-                            value={contactStatus}
-                            onChange={(e) => setLeadStatus(record.lead.id, e.target.value as LeadContactStatus)}
-                          >
-                            {Object.entries(CONTACT_STATUS_LABELS).map(([val, label]) => (
-                              <option key={val} value={val}>{label}</option>
-                            ))}
-                          </select>
-                        </div>
-                        <div className="cell actionCell">
-                          <button
-                            className={`iconButton${isResearched ? " iconButton--done" : ""}`}
-                            type="button"
-                            onClick={() => void researchLead(record, research?.talkingPoints)}
-                            title={isResearched ? "Re-research lead" : "Research lead"}
-                            disabled={pitchPending}
-                          >
-                            <Sparkles size={16} />
-                          </button>
-                          <button
-                            className="iconButton"
-                            type="button"
-                            onClick={() => void approveDraft(record)}
-                            title={
-                              canDraft
-                                ? isPreparingDraft
-                                  ? "Preparing draft"
-                                  : "Research and move to drafts"
-                                : isPreparingDraft || isFindingEmail
-                                  ? "Finding email and preparing draft"
-                                  : "Find email, research, and move to drafts"
-                            }
-                            disabled={isPreparingDraft || isFindingEmail}
-                          >
-                            <Mail size={16} />
-                          </button>
-                          <button
-                            className="iconButton"
-                            type="button"
-                            onClick={() => setExpandedLeadId(isExpanded ? null : record.lead.id)}
-                            title={isExpanded ? "Hide lead details" : "Review lead details"}
-                          >
-                            {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                          </button>
-                        </div>
-                      </div>
-
-                      {isExpanded ? (
-                        <div className="researchPanel">
-                          {research ? (
-                            <>
-                              <div className="researchCol">
-                                <h3>Summary</h3>
-                                <p>{research.pitch.summary}</p>
-                              </div>
-                              <div className="researchCol">
-                                <h3>Talking Points</h3>
-                                <textarea
-                                  value={research.talkingPoints}
-                                  onChange={(event) => updateTalkingPoints(record.lead.id, event.target.value)}
-                                />
-                              </div>
-                              <div className="researchCol">
-                                <h3>Pain Points</h3>
-                                <ul className="plainList">
-                                  {research.pitch.painPoints.map((item) => (
-                                    <li key={item}>{item}</li>
-                                  ))}
-                                </ul>
-                                {(research.followUp1 || research.followUp2) ? (
-                                  <div className="sequenceReadyBadge">
-                                    3-email sequence ready
-                                  </div>
-                                ) : (
-                                  <div className="sequenceLoadingBadge">
-                                    Generating sequence...
-                                  </div>
-                                )}
-                              </div>
-                              <div className="researchFooter">
-                                <div className="microMeta">
-                                  <span>Bridge insight: {research.pitch.bridgeInsight}</span>
-                                  <span>Specificity anchors: {research.pitch.variableEvidence.join(", ") || "None detected"}</span>
-                                  <span>Contact email: {getEmailDisplay(record)}</span>
-                                </div>
-                                <div className="inlineActions">
-                                  <button className="secondaryButton" type="button" onClick={() => void rebuildDraftFromTalkingPoints(record)}>
-                                    <RefreshCw size={16} />
-                                    Regenerate
-                                  </button>
-                                  <button
-                                    className="primaryButton"
-                                    type="button"
-                                    onClick={() => void approveDraft(record)}
-                                    disabled={isFindingEmail || isPreparingDraft}
-                                    title={
-                                      canDraft
-                                        ? "Research is done. Move this lead into drafts."
-                                        : "Find email, then move this researched lead into drafts."
-                                    }
-                                  >
-                                    <CircleCheck size={16} />
-                                    {isPreparingDraft
-                                      ? "Preparing Draft..."
-                                      : isFindingEmail
-                                        ? "Finding Email..."
-                                        : canDraft
-                                          ? "Move to Drafts"
-                                          : "Find Email & Move to Drafts"}
-                                  </button>
-                                </div>
-                              </div>
-                            </>
-                          ) : (
-                            <>
-                              <div className="researchCol">
-                                <h3>Profile</h3>
-                                <p>{record.lead.name} is {record.lead.title} at {record.lead.companyName}.</p>
-                              </div>
-                              <div className="researchCol">
-                                <h3>Contact Details</h3>
-                                <ul className="plainList">
-                                  <li>Email: {getEmailDisplay(record)}</li>
-                                  <li>LinkedIn: {record.lead.linkedinUrl || "Not available yet"}</li>
-                                  <li>Domain: {record.lead.companyDomain || "Not available yet"}</li>
-                                </ul>
-                              </div>
-                              <div className="researchCol">
-                                <h3>Next Step</h3>
-                                <p>Review the lead here, then run research or go straight to draft prep. Draft prep will look up the email first, then generate the outreach sequence.</p>
-                              </div>
-                              <div className="researchFooter">
-                                <div className="microMeta">
-                                  <span>Contact email: {getEmailDisplay(record)}</span>
-                                  <span>Company: {record.lead.companyName}</span>
-                                  <span>Title: {record.lead.title}</span>
-                                </div>
-                                <div className="inlineActions">
-                                  <button
-                                    className="secondaryButton"
-                                    type="button"
-                                    onClick={() => void researchLead(record)}
-                                    disabled={pitchPending || isPreparingDraft}
-                                  >
-                                    <Sparkles size={16} />
-                                    {pitchPending ? "Researching..." : "Research Lead"}
-                                  </button>
-                                  <button
-                                    className="primaryButton"
-                                    type="button"
-                                    onClick={() => void approveDraft(record)}
-                                    disabled={isFindingEmail || isPreparingDraft}
-                                    title="Find email, run research, and move the lead into drafts."
-                                  >
-                                    <Mail size={16} />
-                                    {isPreparingDraft
-                                      ? "Preparing Draft..."
-                                      : isFindingEmail
-                                        ? "Finding Email..."
-                                        : "Find Email, Research & Draft"}
-                                  </button>
-                                </div>
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </div>
-            </>
+            <div className="emptyStateTable">
+              <Building2 size={34} />
+              <p>No pipeline locations match the current filters.</p>
+            </div>
           )}
         </section>
       </>
     );
   }
 
-  function renderDraftsPage() {
-    const currentContent = selectedDraft ? getCurrentDraftContent(selectedDraft) : null;
-    const hasSequence = selectedDraft && selectedDraft.followUps.length > 0;
-    const sequenceLabels = ["Email 1", "Follow-up 1", "Follow-up 2"];
+  function renderLocationDetail() {
+    if (!currentLocation) {
+      return renderContactsHome();
+    }
 
     return (
       <>
         <header className="pageHeader">
           <div>
-            <h1>Outreach Drafts</h1>
-            <p>{filteredDrafts.length} of {drafts.length} {drafts.length === 1 ? "draft" : "drafts"} — review, edit, and push to Gmail</p>
-          </div>
-          <div className="draftHeaderControls">
-            <select
-              className="draftFilter"
-              value={draftFilter}
-              onChange={(event) => setDraftFilter(event.target.value as DraftFilter)}
-            >
-              <option value="all">all</option>
-              <option value="generated">generated</option>
-              <option value="drafted">gmail drafted</option>
-            </select>
-            {drafts.length > 0 ? (
-              <button className="secondaryButton" type="button" onClick={exportDraftsCSV}>
-                <Download size={15} />
-                Export CSV
-              </button>
-            ) : null}
+            <button className="backLink" type="button" onClick={() => {
+              setSelectedLocationId(null);
+              setLocationDetail(null);
+              setExpandedLeadId(null);
+            }}>
+              <ArrowLeft size={16} />
+              Back to Locations
+            </button>
+            <h1>{currentLocation.companyName}</h1>
+            <p>
+              {currentLocation.companyDomain || "No domain"} · {formatCompanyMeta(currentLocation) || "Location unavailable"}
+            </p>
           </div>
         </header>
 
-        {selectedDraft && currentContent ? (
-          <section className="draftEditor">
-            {/* Sequence tabs */}
-            {hasSequence ? (
-              <div className="sequenceTabs">
-                {sequenceLabels.slice(0, 1 + selectedDraft.followUps.length).map((label, i) => {
-                  const isDrafted =
-                    i === 0
-                      ? selectedDraft.state === "drafted"
-                      : selectedDraft.followUps[i - 1]?.state === "drafted";
-                  return (
-                    <button
-                      key={i}
-                      className={`sequenceTab ${draftSequenceTab === i ? "active" : ""}`}
-                      type="button"
-                      onClick={() => setDraftSequenceTab(i as 0 | 1 | 2)}
-                    >
-                      {label}
-                      {isDrafted ? <span className="sequenceTabDot" /> : null}
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="sequenceLoadingBadge sequenceLoadingBadge--inline">
-                Generating follow-up sequence in the background...
-              </div>
-            )}
+        {renderFeedback()}
 
-            <div className="draftHeader">
-              <div>
-                <h2>
-                  {currentContent.subject}{" "}
-                  <span className="generatedBadge">
-                    {draftSequenceTab === 0 ? selectedDraft.state : (selectedDraft.followUps[draftSequenceTab - 1]?.state ?? "generated")}
-                  </span>
-                </h2>
-                <p>
-                  To: {selectedDraft.contactName} at {selectedDraft.companyName}{" "}
-                  <span className="mono">{selectedDraft.email || "No email found"}</span>
-                </p>
-              </div>
-              <div className="draftHeaderActions">
-                <button
-                  className="iconButton"
-                  type="button"
-                  onClick={() => navigator.clipboard.writeText(currentContent.body)}
-                  title="Copy body"
-                >
-                  <Copy size={16} />
-                </button>
-              </div>
+        <section className="detailToolbarCard">
+          <div className="detailToolbar">
+            <div className="detailSelect">
+              <label>Pipeline</label>
+              <select
+                value={currentLocation.pipelineStage}
+                onChange={(event) => void updateCurrentLocationField("pipelineStage", event.target.value as PipelineStage)}
+              >
+                {(Object.keys(PIPELINE_STAGE_LABELS) as PipelineStage[]).map((stage) => (
+                  <option key={stage} value={stage}>
+                    {PIPELINE_STAGE_LABELS[stage]}
+                  </option>
+                ))}
+              </select>
             </div>
 
-            <div className="draftField">
-              <label>Subject</label>
-              <input value={currentContent.subject} onChange={(event) => updateDraft("subject", event.target.value)} />
+            <div className="detailSelect">
+              <label>Type</label>
+              <select
+                value={currentLocation.locationType}
+                onChange={(event) => void updateCurrentLocationField("locationType", event.target.value as LocationType)}
+              >
+                {(Object.keys(LOCATION_TYPE_LABELS) as LocationType[]).map((type) => (
+                  <option key={type} value={type}>
+                    {LOCATION_TYPE_LABELS[type]}
+                  </option>
+                ))}
+              </select>
             </div>
 
-            <div className="draftField">
-              <label>Body</label>
-              <textarea value={currentContent.body} onChange={(event) => updateDraft("body", event.target.value)} />
+            <span className="statusPill">{currentLocation.category || currentLocation.industry || "Target account"}</span>
+
+            <div className="detailSelect detailSelect--pitch">
+              <label>Pitch</label>
+              <select
+                value={currentLocation.pitchType}
+                onChange={(event) => void updateCurrentLocationField("pitchType", event.target.value as PitchType)}
+              >
+                {(Object.keys(PITCH_TYPE_LABELS) as PitchType[]).map((pitchType) => (
+                  <option key={pitchType} value={pitchType}>
+                    {PITCH_TYPE_LABELS[pitchType]}
+                  </option>
+                ))}
+              </select>
             </div>
 
-            <div className="draftFooter">
-              {!selectedDraft.email ? (
-                <p className="error">
-                  No email found yet for this lead. You can still review and copy the sequence here, but Gmail draft creation is disabled until an email is found.
-                </p>
-              ) : null}
-              <div className="inlineActions">
-                <button className="secondaryButton" type="button" onClick={() => setActivePage("search")}>
-                  Back to Search
-                </button>
-                <button className="secondaryButton" type="button" onClick={() => navigator.clipboard.writeText(currentContent.body)}>
-                  <Copy size={16} />
-                  Copy
-                </button>
-                {hasSequence ? (
+            <button className="primaryButton" type="button" onClick={() => void researchAllLeads()} disabled={pitchPending || currentContacts.length === 0}>
+              <Sparkles size={16} />
+              {isBulkResearching ? "Running..." : "Run FF Outreach AI"}
+            </button>
+          </div>
+        </section>
+
+        <section className="detailGrid">
+          <article className="dashboardPanel">
+            <h2>About</h2>
+            <p>{currentLocation.about || "No background captured yet. Load contacts or update notes to build out the account brief."}</p>
+            <div className="locationCounts locationCounts--detail">
+              <span>{currentContacts.length} contacts loaded</span>
+              <span>{currentLocationEmails.length} queued emails</span>
+            </div>
+          </article>
+
+          <article className="dashboardPanel">
+            <h2>Notes & Insights</h2>
+            <textarea
+              className="detailNotes"
+              value={notesDraft}
+              onChange={(event) => setNotesDraft(event.target.value)}
+              placeholder="Capture account context, food access notes, stakeholder hints, and operational cues here..."
+            />
+            <div className="inlineActions">
+              <button className="secondaryButton" type="button" onClick={() => setNotesDraft(currentLocation.notes || "")}>
+                Reset
+              </button>
+              <button className="primaryButton" type="button" onClick={() => void saveLocationNotes()} disabled={savePending}>
+                {savePending ? "Saving..." : "Save Notes"}
+              </button>
+            </div>
+          </article>
+        </section>
+
+        <section className="resultsPanel sectionCard">
+          <div className="sectionHeader sectionHeader--filters">
+            <div>
+              <h2>Contacts</h2>
+              <p>{visibleContacts.length} visible contacts at this location.</p>
+            </div>
+            <div className="sectionControls">
+              <input
+                className="compactInput"
+                value={contactSearch}
+                onChange={(event) => setContactSearch(event.target.value)}
+                placeholder="Filter by name, email, title, or department..."
+              />
+              <button className="secondaryButton" type="button" onClick={() => void loadContactsForLocation()} disabled={loadingLocationId === currentLocation.id}>
+                <RefreshCw size={15} />
+                {loadingLocationId === currentLocation.id ? "Loading..." : currentContacts.length > 0 ? "Refresh Contacts" : "Find Contacts"}
+              </button>
+            </div>
+          </div>
+
+          <div className="departmentPills">
+            <button
+              className={`topPill ${departmentFilter === "all" ? "active" : ""}`}
+              type="button"
+              onClick={() => setDepartmentFilter("all")}
+            >
+              All
+            </button>
+            {(Object.keys(DEPARTMENT_FILTER_LABELS) as Array<Exclude<DepartmentFilter, "all">>).map((department) => (
+              <button
+                key={department}
+                className={`topPill ${departmentFilter === department ? "active" : ""}`}
+                type="button"
+                onClick={() => setDepartmentFilter(department)}
+              >
+                {DEPARTMENT_FILTER_LABELS[department]}
+              </button>
+            ))}
+          </div>
+
+          {bulkResearchProgress ? (
+            <div className="bulkProgressWrap bulkProgressWrap--detail">
+              <div className="bulkProgressBar">
+                <div
+                  className="bulkProgressFill"
+                  style={{ width: `${(bulkResearchProgress.completed / bulkResearchProgress.total) * 100}%` }}
+                />
+              </div>
+              <span className="bulkProgressLabel">
+                {bulkResearchProgress.completed}/{bulkResearchProgress.total}
+                {bulkResearchProgress.active ? " — researching..." : " complete"}
+              </span>
+            </div>
+          ) : null}
+
+          {visibleContacts.length > 0 ? (
+            <div className="tableWrap contactTable">
+              <div className="tableHeader contactTableHeader">
+                <span>Name</span>
+                <span>Email</span>
+                <span>Position</span>
+                <span>Department</span>
+                <span>Actions</span>
+              </div>
+
+              {visibleContacts.map((record) => {
+                const research = researchByLeadId[record.lead.id];
+                const isExpanded = expandedLeadId === record.lead.id;
+                const isFindingEmail = emailLookupLeadId === record.lead.id;
+                const hasQueuedEmails = currentLocationEmails.some((email) => email.leadId === record.lead.id);
+
+                return (
+                  <div key={record.lead.id} className="tableRowGroup">
+                    <div className="tableRow contactTableRow">
+                      <div className="cell primaryCell">
+                        <div className="nameBlock">
+                          <strong>{record.lead.name}</strong>
+                          <span>{record.lead.companyName}</span>
+                          {research?.researchedAt ? (
+                            <span className="researchedBadge">
+                              Researched {new Date(research.researchedAt).toLocaleDateString()}
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="cell mono">
+                        {getEmailDisplay(record)}
+                        {record.lead.email && emailSourceByLeadId[record.lead.id] ? (
+                          <span className={`sourceBadge sourceBadge--${emailSourceByLeadId[record.lead.id]}`}>
+                            {emailSourceByLeadId[record.lead.id] === "apollo"
+                              ? "via Apollo"
+                              : emailSourceByLeadId[record.lead.id] === "tomba"
+                                ? "via Tomba"
+                                : "existing"}
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="cell">{record.lead.title}</div>
+                      <div className="cell">
+                        <span className="statusPill">
+                          {record.lead.department ? DEPARTMENT_FILTER_LABELS[record.lead.department] : "Other"}
+                        </span>
+                      </div>
+                      <div className="cell actionCell">
+                        <button
+                          className={`iconButton${research ? " iconButton--done" : ""}`}
+                          type="button"
+                          onClick={() => void researchLead(record, research?.talkingPoints)}
+                          disabled={pitchPending}
+                          title={research ? "Refresh research" : "Research contact"}
+                        >
+                          <Sparkles size={16} />
+                        </button>
+                        <button
+                          className={`iconButton${hasQueuedEmails ? " iconButton--done" : ""}`}
+                          type="button"
+                          onClick={() => void queueLeadSequence(record)}
+                          disabled={draftPending || isFindingEmail}
+                          title={hasQueuedEmails ? "Replace queued email sequence" : "Queue 3-email sequence"}
+                        >
+                          <Mail size={16} />
+                        </button>
+                        <button
+                          className="iconButton"
+                          type="button"
+                          onClick={() => setExpandedLeadId(isExpanded ? null : record.lead.id)}
+                          title={isExpanded ? "Hide details" : "Review details"}
+                        >
+                          {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                        </button>
+                      </div>
+                    </div>
+
+                    {isExpanded ? (
+                      <div className="researchPanel">
+                        {research ? (
+                          <>
+                            <div className="researchCol">
+                              <h3>Summary</h3>
+                              <p>{research.pitch.summary}</p>
+                            </div>
+                            <div className="researchCol">
+                              <h3>Talking Points</h3>
+                              <textarea
+                                value={research.talkingPoints}
+                                onChange={(event) => updateTalkingPoints(record.lead.id, event.target.value)}
+                              />
+                            </div>
+                            <div className="researchCol">
+                              <h3>Pain Points</h3>
+                              <ul className="plainList">
+                                {research.pitch.painPoints.map((item) => (
+                                  <li key={item}>{item}</li>
+                                ))}
+                              </ul>
+                              {research.followUp1 && research.followUp2 ? (
+                                <div className="sequenceReadyBadge">3-email sequence ready</div>
+                              ) : (
+                                <div className="sequenceLoadingBadge">Generating sequence...</div>
+                              )}
+                            </div>
+                            <div className="researchFooter">
+                              <div className="microMeta">
+                                <span>Bridge insight: {research.pitch.bridgeInsight}</span>
+                                <span>Specificity anchors: {research.pitch.variableEvidence.join(", ") || "None detected"}</span>
+                                <span>Contact email: {getEmailDisplay(record)}</span>
+                              </div>
+                              <div className="inlineActions">
+                                <button className="secondaryButton" type="button" onClick={() => void researchLead(record, research.talkingPoints)}>
+                                  <RefreshCw size={16} />
+                                  Regenerate
+                                </button>
+                                <button className="primaryButton" type="button" onClick={() => void queueLeadSequence(record)}>
+                                  <Mail size={16} />
+                                  Queue Sequence
+                                </button>
+                              </div>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="researchCol">
+                              <h3>Profile</h3>
+                              <p>{record.lead.name} is {record.lead.title} at {record.lead.companyName}.</p>
+                            </div>
+                            <div className="researchCol">
+                              <h3>Contact Details</h3>
+                              <ul className="plainList">
+                                <li>Email: {getEmailDisplay(record)}</li>
+                                <li>LinkedIn: {record.lead.linkedinUrl || "Not available yet"}</li>
+                                <li>Domain: {record.lead.companyDomain || "Not available yet"}</li>
+                              </ul>
+                            </div>
+                            <div className="researchCol">
+                              <h3>Next Step</h3>
+                              <p>Run Farmers Fridge research here, then queue the outreach sequence into the Emails page for review and Gmail drafting.</p>
+                            </div>
+                            <div className="researchFooter">
+                              <div className="microMeta">
+                                <span>Contact email: {getEmailDisplay(record)}</span>
+                                <span>Department: {record.lead.department ? DEPARTMENT_FILTER_LABELS[record.lead.department] : "Other"}</span>
+                                <span>Title: {record.lead.title}</span>
+                              </div>
+                              <div className="inlineActions">
+                                <button className="secondaryButton" type="button" onClick={() => void researchLead(record)} disabled={pitchPending}>
+                                  <Sparkles size={16} />
+                                  {pitchPending ? "Researching..." : "Research Contact"}
+                                </button>
+                                <button className="primaryButton" type="button" onClick={() => void queueLeadSequence(record)} disabled={draftPending}>
+                                  <Mail size={16} />
+                                  Queue Sequence
+                                </button>
+                              </div>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="emptyStateTable">
+              <Building2 size={34} />
+              <p>Load contacts for this location to review stakeholders and queue outreach.</p>
+            </div>
+          )}
+        </section>
+      </>
+    );
+  }
+
+  function renderEmailsPage() {
+    const visibleEmailRows = filteredEmails(emails, emailFilter, emailSearch);
+
+    return (
+      <>
+        <header className="pageHeader">
+          <div>
+            <h1>Emails</h1>
+            <p>{visibleEmailRows.length} of {emails.length} total emails queued for review, edits, and Gmail drafting.</p>
+          </div>
+          <div className="sectionControls">
+            <select value={emailFilter} onChange={(event) => setEmailFilter(event.target.value as EmailFilter)}>
+              <option value="all">all</option>
+              <option value="generated">generated</option>
+              <option value="approved">approved</option>
+              <option value="sent">sent</option>
+            </select>
+            <button className="secondaryButton" type="button" onClick={exportEmailsCSV}>
+              <Download size={15} />
+              Export All
+            </button>
+            <button className="secondaryButton" type="button" onClick={exportEmailContactsCSV}>
+              <Download size={15} />
+              Export Contacts
+            </button>
+          </div>
+        </header>
+
+        {renderFeedback()}
+
+        {visibleEmailRows.length > 0 ? (
+          <section className="emailWorkbench">
+            <div className="resultsPanel emailListPane">
+              <div className="sectionHeader sectionHeader--filters">
+                <div>
+                  <h2>Queue</h2>
+                  <p>Generated, approved, and sent sequences.</p>
+                </div>
+                <input
+                  className="compactInput"
+                  value={emailSearch}
+                  onChange={(event) => setEmailSearch(event.target.value)}
+                  placeholder="Filter emails..."
+                />
+              </div>
+              <div className="emailList">
+                {visibleEmailRows.map((email) => (
                   <button
-                    className="secondaryButton"
+                    key={email.id}
+                    className={`emailRowCard ${selectedEmail?.id === email.id ? "active" : ""}`}
                     type="button"
-                    onClick={() => void createAllGmailDrafts()}
-                    disabled={draftPending || !selectedDraft.email}
+                    onClick={() => setSelectedEmailId(email.id)}
                   >
-                    <Send size={16} />
-                    {draftPending ? "Creating..." : "Create All Gmail Drafts"}
+                    <div className="emailRowTop">
+                      <strong>{email.subject}</strong>
+                      <span className={getStatusClass(email.status)}>
+                        {EMAIL_STATUS_LABELS[email.status]}
+                      </span>
+                    </div>
+                    <div className="emailRowMeta">
+                      <span>{email.contactName || "Unknown contact"}</span>
+                      <span>{email.contactEmail || "No email found"}</span>
+                    </div>
+                    <div className="emailRowMeta">
+                      <span>{email.companyName || "No company"}</span>
+                      <span>Step {email.sequenceStep}</span>
+                    </div>
+                    <p>{email.body.slice(0, 180)}{email.body.length > 180 ? "..." : ""}</p>
                   </button>
-                ) : null}
-                <button
-                  className="primaryButton"
-                  type="button"
-                  onClick={() => void createGmailDraft()}
-                  disabled={draftPending || !selectedDraft.email}
-                >
-                  <Send size={16} />
-                  {draftPending ? "Creating Gmail Draft..." : "Create Gmail Draft"}
-                </button>
+                ))}
               </div>
             </div>
 
-            <section className="gmailCard">
-              <strong>Gmail connection</strong>
-              <p>
-                {gmailStatus?.connected
-                  ? "Gmail is connected with compose access."
-                  : "Connect Gmail before creating drafts. Each teammate can authorize their own mailbox from this same app."}
-              </p>
-              <div className="inlineActions">
-                <a className="secondaryLink" href="/signin">
-                  {gmailStatus?.connected ? "Reauthorize Gmail" : "Connect Gmail"}
-                </a>
-                <a className="secondaryLink" href="https://mail.google.com/mail/u/0/#drafts" target="_blank" rel="noreferrer">
-                  Open Gmail Drafts <ArrowUpRight size={14} />
-                </a>
-              </div>
-            </section>
+            <div className="draftEditor emailEditorPane">
+              {selectedEmail ? (
+                <>
+                  <div className="draftHeader">
+                    <div>
+                      <h2>{selectedEmail.companyName || "Draft Email"}</h2>
+                      <p>
+                        To: {selectedEmail.contactName || "Unknown"}{" "}
+                        <span className="mono">{selectedEmail.contactEmail || "No email found"}</span>
+                      </p>
+                    </div>
+                    <div className="draftHeaderActions">
+                      <span className={getStatusClass(emailEditor.status)}>
+                        {EMAIL_STATUS_LABELS[emailEditor.status]}
+                      </span>
+                    </div>
+                  </div>
 
-            {draftError ? <p className="error">{draftError}</p> : null}
-            {draftSuccess ? (
-              <p className="success">
-                Draft created in Gmail. Open{" "}
-                <a className="inlineLink" href={draftSuccess} target="_blank" rel="noreferrer">
-                  Gmail drafts
-                </a>{" "}
-                to review and send.
-              </p>
-            ) : null}
+                  <div className="draftField">
+                    <label>Subject</label>
+                    <input
+                      value={emailEditor.subject}
+                      onChange={(event) =>
+                        setEmailEditor((current) => ({ ...current, subject: event.target.value }))
+                      }
+                    />
+                  </div>
+
+                  <div className="draftField">
+                    <label>Body</label>
+                    <textarea
+                      value={emailEditor.body}
+                      onChange={(event) =>
+                        setEmailEditor((current) => ({ ...current, body: event.target.value }))
+                      }
+                    />
+                  </div>
+
+                  <div className="draftField">
+                    <label>Status</label>
+                    <select
+                      value={emailEditor.status}
+                      onChange={(event) =>
+                        setEmailEditor((current) => ({
+                          ...current,
+                          status: event.target.value as Exclude<EmailFilter, "all">
+                        }))
+                      }
+                    >
+                      <option value="generated">Generated</option>
+                      <option value="approved">Approved</option>
+                      <option value="sent">Sent</option>
+                    </select>
+                  </div>
+
+                  <div className="draftFooter">
+                    {!selectedEmail.contactEmail ? (
+                      <p className="error">
+                        No email found yet for this contact. You can still edit the copy here, but Gmail draft creation is disabled until an address is found.
+                      </p>
+                    ) : null}
+                    <div className="inlineActions">
+                      <button className="secondaryButton" type="button" onClick={() => navigator.clipboard.writeText(emailEditor.body)}>
+                        <Copy size={16} />
+                        Copy
+                      </button>
+                      <button className="secondaryButton" type="button" onClick={() => void saveSelectedEmail()} disabled={savePending}>
+                        {savePending ? "Saving..." : "Save"}
+                      </button>
+                      <button className="primaryButton" type="button" onClick={() => void createGmailDraftForSelectedEmail()} disabled={draftPending || !selectedEmail.contactEmail}>
+                        <Send size={16} />
+                        {draftPending ? "Creating..." : "Create Gmail Draft"}
+                      </button>
+                    </div>
+                  </div>
+
+                  <section className="gmailCard">
+                    <strong>Gmail connection</strong>
+                    <p>
+                      {gmailStatus?.connected
+                        ? "Gmail is connected with compose access."
+                        : "Connect Gmail before creating drafts. Each teammate can authorize their own mailbox from this same app."}
+                    </p>
+                    <div className="inlineActions">
+                      <a className="secondaryLink" href="/signin">
+                        {gmailStatus?.connected ? "Reauthorize Gmail" : "Connect Gmail"}
+                      </a>
+                      <a className="secondaryLink" href="https://mail.google.com/mail/u/0/#drafts" target="_blank" rel="noreferrer">
+                        Open Gmail Drafts <ArrowUpRight size={14} />
+                      </a>
+                    </div>
+                  </section>
+                </>
+              ) : (
+                <div className="emptyStateTable">
+                  <Mail size={34} />
+                  <p>No emails match the current filter.</p>
+                </div>
+              )}
+            </div>
           </section>
         ) : (
           <section className="resultsPanel">
             <div className="emptyStateTable">
               <Mail size={34} />
-              {drafts.length > 0 ? (
-                <>
-                  <p>No drafts match the current filter.</p>
-                  <button className="secondaryButton" type="button" onClick={() => setDraftFilter("all")}>
-                    Show All Drafts
-                  </button>
-                </>
-              ) : (
-                <p>No drafts yet. Research a lead, approve the pitch, and it lands here ready to push to Gmail.</p>
-              )}
+              <p>No emails yet. Queue a sequence from a location detail view to populate this page.</p>
             </div>
           </section>
         )}
@@ -1666,130 +2124,81 @@ export function OutreachDashboard() {
     );
   }
 
-  function renderDashboardPage() {
+  function renderTonePage() {
     return (
       <>
         <header className="pageHeader">
           <div>
-            <h1>Your Pipeline</h1>
-            <p>Every deal starts here — track leads from first search through drafted outreach and into Gmail.</p>
+            <h1>Tone of Voice</h1>
+            <p>Set the Farmers Fridge outbound style you want the AI to follow for future research and sequence generation.</p>
           </div>
         </header>
 
-        <section className="dashboardGrid">
-          {dashboardStats.map((stat) => (
-            <article key={stat.label} className="statCard">
-              <span>{stat.label}</span>
-              <strong>{stat.value}</strong>
-            </article>
-          ))}
-        </section>
+        {renderFeedback()}
 
-        {recentSearches.length > 0 ? (
-          <section className="recentSearches">
-            <h2 className="recentSearchesTitle">Recent Searches</h2>
-            <div className="recentSearchList">
-              {recentSearches.map((s) => (
-                <button
-                  key={s.query}
-                  className="recentSearchItem"
-                  type="button"
-                  onClick={() => {
-                    setQuery(s.query);
-                    setActivePage("search");
-                  }}
-                >
-                  <span className="recentSearchQuery">{s.query}</span>
-                  <span className="recentSearchMeta">
-                    {s.count} leads · {new Date(s.fetchedAt).toLocaleDateString()}
-                  </span>
-                </button>
-              ))}
+        <section className="toneGrid">
+          <article className="dashboardPanel">
+            <h2>How This Works</h2>
+            <p>These settings feed directly into the outreach prompt. Keep the guidance concrete so the copy stays consistent across new account research runs.</p>
+            <div className="summaryList">
+              <div className="summaryRow">
+                <span>Best for</span>
+                <strong>Voice direction, phrasing examples, and red lines</strong>
+              </div>
+              <div className="summaryRow">
+                <span>Applied to</span>
+                <strong>Initial emails plus follow-ups</strong>
+              </div>
+              <div className="summaryRow">
+                <span>Last updated</span>
+                <strong>{toneSettings.updatedAt ? new Date(toneSettings.updatedAt).toLocaleString() : "Not yet saved"}</strong>
+              </div>
+            </div>
+          </article>
+
+          <section className="draftEditor toneEditor">
+            <div className="draftField">
+              <label>Voice Description</label>
+              <textarea
+                value={toneSettings.voiceDescription}
+                onChange={(event) => setToneSettings((current) => ({ ...current, voiceDescription: event.target.value }))}
+                placeholder="Warm, credible, practical, and specific. Sound like a strong account executive, not a marketing campaign."
+              />
+            </div>
+
+            <div className="draftField">
+              <label>Do Examples</label>
+              <textarea
+                value={toneSettings.doExamples}
+                onChange={(event) => setToneSettings((current) => ({ ...current, doExamples: event.target.value }))}
+                placeholder="Use specific observations, mention food access or employee experience, keep CTAs low-friction."
+              />
+            </div>
+
+            <div className="draftField">
+              <label>Don't Examples</label>
+              <textarea
+                value={toneSettings.dontExamples}
+                onChange={(event) => setToneSettings((current) => ({ ...current, dontExamples: event.target.value }))}
+                placeholder="Avoid corporate speak, inflated ROI claims, or generic wellness buzzwords."
+              />
+            </div>
+
+            <div className="draftField">
+              <label>Sample Email</label>
+              <textarea
+                value={toneSettings.sampleEmail}
+                onChange={(event) => setToneSettings((current) => ({ ...current, sampleEmail: event.target.value }))}
+                placeholder="Paste a strong example you want future AI-generated outreach to rhyme with."
+              />
+            </div>
+
+            <div className="draftFooter">
+              <button className="primaryButton" type="button" onClick={() => void saveToneSettings()} disabled={savePending}>
+                {savePending ? "Saving..." : "Save Tone Settings"}
+              </button>
             </div>
           </section>
-        ) : null}
-
-        <section className="dashboardPanels">
-          <article className="dashboardPanel">
-            <h2>Search Coverage</h2>
-            <p>
-              Current ICP: <strong>{query}</strong>
-            </p>
-            <p>
-              Role filter:{" "}
-              <strong>
-                {filters.personas
-                  .map((persona) => (persona === "custom" ? filters.customPersona || "Custom role" : PERSONA_LABELS[persona]))
-                  .join(", ")}
-              </strong>
-            </p>
-            <p>
-              States: <strong>{filters.states.length === 0 ? "Nationwide" : filters.states.length === US_STATES.length ? "All states" : `${filters.states.length} selected`}</strong> · Minimum employees: <strong>{filters.employeeMin}</strong>
-            </p>
-          </article>
-
-          <article className="dashboardPanel">
-            <h2>The Sales Playbook</h2>
-            <p>Find the right location, anchor the pitch in real workplace pain points, then push a polished email straight into Gmail — ready to send.</p>
-            <div className="inlineActions">
-              <button className="primaryButton" type="button" onClick={() => setActivePage("search")}>
-                Go to Search
-              </button>
-              <button className="secondaryButton" type="button" onClick={() => setActivePage("drafts")}>
-                Review Drafts
-              </button>
-            </div>
-          </article>
-        </section>
-
-        <section className="creditsPanel">
-          <article className="creditServiceCard">
-            <div className="creditServiceHeader">
-              <ArrowUpRight size={16} />
-              <strong>Apollo</strong>
-            </div>
-            <p className="creditMuted">Free search runs through Apollo first. Optional review-stage email enrichment can use Apollo credits.</p>
-            <a
-              className="secondaryLink creditDashLink"
-              href="https://app.apollo.io/#/settings/credits/current"
-              target="_blank"
-              rel="noreferrer"
-            >
-              View usage dashboard <ArrowUpRight size={13} />
-            </a>
-          </article>
-
-          <article className="creditServiceCard">
-            <div className="creditServiceHeader">
-              <ArrowUpRight size={16} />
-              <strong>Tavily</strong>
-            </div>
-            <p className="creditMuted">Tavily does not expose credit balance via API.</p>
-            <a
-              className="secondaryLink creditDashLink"
-              href="https://app.tavily.com"
-              target="_blank"
-              rel="noreferrer"
-            >
-              View usage dashboard <ArrowUpRight size={13} />
-            </a>
-          </article>
-
-          <article className="creditServiceCard">
-            <div className="creditServiceHeader">
-              <ArrowUpRight size={16} />
-              <strong>Tomba</strong>
-            </div>
-            <p className="creditMuted">Fallback email finder — only used after you review a lead and Apollo enrichment still doesn't return an email.</p>
-            <a
-              className="secondaryLink creditDashLink"
-              href="https://app.tomba.io"
-              target="_blank"
-              rel="noreferrer"
-            >
-              View usage dashboard <ArrowUpRight size={13} />
-            </a>
-          </article>
         </section>
       </>
     );
@@ -1799,8 +2208,8 @@ export function OutreachDashboard() {
     <main className="appShell">
       <aside className="sidebar">
         <div className="brandBlock">
-          <h2>FF Lead Gen Hub</h2>
-          <p>Find leads. Close deals.</p>
+          <h2>Farmer&apos;s Fridge</h2>
+          <p>Smart outreach for workplace placement.</p>
         </div>
 
         <nav className="sidebarNav">
@@ -1808,12 +2217,10 @@ export function OutreachDashboard() {
             const Icon = item.icon;
             const isActive = item.id === activePage;
             const badge =
-              item.id === "search" && (selectedCompany ? leads.length > 0 : companies.length > 0)
-                ? selectedCompany
-                  ? leads.length
-                  : companies.length
-                : item.id === "drafts" && drafts.length > 0
-                  ? drafts.length
+              item.id === "contacts"
+                ? locations.length
+                : item.id === "emails"
+                  ? emails.length
                   : null;
 
             return (
@@ -1834,9 +2241,31 @@ export function OutreachDashboard() {
 
       <section className="mainPane">
         {activePage === "dashboard" ? renderDashboardPage() : null}
-        {activePage === "search" ? renderSearchPage() : null}
-        {activePage === "drafts" ? renderDraftsPage() : null}
+        {activePage === "contacts" ? (selectedLocationId ? renderLocationDetail() : renderContactsHome()) : null}
+        {activePage === "emails" ? renderEmailsPage() : null}
+        {activePage === "tone" ? renderTonePage() : null}
       </section>
     </main>
   );
+}
+
+function filteredEmails(emails: StoredEmail[], emailFilter: EmailFilter, emailSearch: string) {
+  return emails.filter((email) => {
+    const matchesFilter = emailFilter === "all" || email.status === emailFilter;
+    const matchesSearch = emailSearch.trim()
+      ? [
+          email.subject,
+          email.body,
+          email.companyName,
+          email.contactName,
+          email.contactEmail
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .includes(emailSearch.trim().toLowerCase())
+      : true;
+
+    return matchesFilter && matchesSearch;
+  });
 }

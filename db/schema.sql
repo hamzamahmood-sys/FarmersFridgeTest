@@ -84,3 +84,74 @@ CREATE TABLE IF NOT EXISTS pitches (
 
 CREATE INDEX IF NOT EXISTS pitches_lead_id_idx    ON pitches (lead_id);
 CREATE INDEX IF NOT EXISTS pitches_created_at_idx ON pitches (created_at DESC);
+
+-- ─── Saved locations (pipeline) ───────────────────────────────────────────────
+-- Companies the user has added to their pipeline. Contacts live in `leads` and
+-- reference the location via organization_id.
+
+CREATE TABLE IF NOT EXISTS saved_locations (
+  id                TEXT        PRIMARY KEY,
+  organization_id   TEXT,
+  company_name      TEXT        NOT NULL,
+  company_domain    TEXT,
+  industry          TEXT,
+  employee_count    INTEGER,
+  hq_city           TEXT,
+  hq_state          TEXT,
+  hq_country        TEXT,
+  about             TEXT,
+  category          TEXT,
+  location_type     TEXT        NOT NULL DEFAULT 'other',
+  pipeline_stage    TEXT        NOT NULL DEFAULT 'prospect',
+  pitch_type        TEXT        NOT NULL DEFAULT 'farmers_fridge',
+  notes             TEXT,
+  delivery_zone     TEXT        NOT NULL DEFAULT 'Other',
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS saved_locations_pipeline_idx ON saved_locations (pipeline_stage);
+CREATE INDEX IF NOT EXISTS saved_locations_type_idx     ON saved_locations (location_type);
+CREATE INDEX IF NOT EXISTS saved_locations_updated_idx  ON saved_locations (updated_at DESC);
+
+-- Add location_id on leads so contacts can be grouped under a saved location.
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS location_id TEXT REFERENCES saved_locations(id) ON DELETE SET NULL;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS department   TEXT;
+CREATE INDEX IF NOT EXISTS leads_location_id_idx ON leads (location_id);
+
+-- ─── Emails (persisted drafts / sent) ─────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS emails (
+  id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  location_id       TEXT        REFERENCES saved_locations(id) ON DELETE CASCADE,
+  lead_id           TEXT        REFERENCES leads(id) ON DELETE SET NULL,
+  contact_name      TEXT,
+  contact_email     TEXT,
+  contact_title     TEXT,
+  company_name      TEXT,
+  location_type     TEXT,
+  sequence_step     INTEGER     NOT NULL DEFAULT 0,
+  subject           TEXT        NOT NULL,
+  body              TEXT        NOT NULL,
+  status            TEXT        NOT NULL DEFAULT 'generated',
+  gmail_draft_url   TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS emails_location_id_idx ON emails (location_id);
+CREATE INDEX IF NOT EXISTS emails_status_idx      ON emails (status);
+CREATE INDEX IF NOT EXISTS emails_created_at_idx  ON emails (created_at DESC);
+
+-- ─── Tone of voice settings ───────────────────────────────────────────────────
+-- One row per user (scoped by the Auth.js users.id). For the current single-
+-- user deployment, row with id=1 is the shared tone.
+
+CREATE TABLE IF NOT EXISTS tone_settings (
+  user_id           INTEGER     PRIMARY KEY,
+  voice_description TEXT        NOT NULL DEFAULT '',
+  do_examples       TEXT        NOT NULL DEFAULT '',
+  dont_examples     TEXT        NOT NULL DEFAULT '',
+  sample_email      TEXT        NOT NULL DEFAULT '',
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

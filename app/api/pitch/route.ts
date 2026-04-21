@@ -3,7 +3,8 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { z, ZodError } from "zod";
 import { generatePitch } from "@/lib/openai";
-import { getCachedPitch, cachePitch } from "@/lib/db";
+import { getCachedPitch, cachePitch, getToneSettings } from "@/lib/db";
+import { resolveCurrentUserId } from "@/lib/auth-user";
 import type { GeneratedPitch } from "@/lib/types";
 
 const companySchema = z.object({
@@ -57,6 +58,7 @@ export async function POST(request: Request) {
     const body = await request.json();
     const payload = payloadSchema.parse(body);
     const leadId = payload.leadRecord.lead.id;
+    const userId = await resolveCurrentUserId();
 
     // Return cached pitch unless the user explicitly regenerated (only for step 1)
     if (!payload.forceRefresh && !payload.talkingPointsOverride && payload.step === 1) {
@@ -66,7 +68,13 @@ export async function POST(request: Request) {
       }
     }
 
-    const pitch = await generatePitch(payload.leadRecord, payload.talkingPointsOverride, payload.step);
+    const toneSettings = await getToneSettings(userId);
+    const pitch = await generatePitch(
+      payload.leadRecord,
+      payload.talkingPointsOverride,
+      payload.step,
+      toneSettings
+    );
 
     // Persist in background
     void cachePitch(leadId, pitch);

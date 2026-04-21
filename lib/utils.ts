@@ -2,8 +2,10 @@ import { DELIVERY_ZONE_MATCHERS } from "@/lib/constants";
 import type {
   ApolloCreditEstimate,
   CompanyFirmographics,
+  ContactDepartment,
   DeliveryZone,
   LeadRecord,
+  LocationType,
   SearchFilters
 } from "@/lib/types";
 
@@ -72,6 +74,70 @@ export function sortLeadRecords(records: LeadRecord[]): LeadRecord[] {
 
 export function formatLocation(company: CompanyFirmographics): string {
   return [company.hqCity, company.hqState, company.hqCountry].filter(Boolean).join(", ");
+}
+
+export function inferLocationType(input: {
+  name?: string;
+  industry?: string;
+  about?: string;
+  keywords?: string[];
+}): LocationType {
+  const haystack = [
+    input.name || "",
+    input.industry || "",
+    input.about || "",
+    ...(input.keywords || [])
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  if (/(hospital|health system|healthcare|medical center|medical|clinic|care center|children'?s hospital)/.test(haystack)) {
+    return "hospital";
+  }
+
+  if (/(airport|terminal|aviation|airlines?)/.test(haystack)) {
+    return "airport";
+  }
+
+  if (/(university|college|campus|school)/.test(haystack)) {
+    return "university";
+  }
+
+  if (/(gym|fitness|wellness club|health club)/.test(haystack)) {
+    return "gym";
+  }
+
+  if (haystack.trim().length > 0) {
+    return "corporate";
+  }
+
+  return "other";
+}
+
+export function inferContactDepartment(title?: string): ContactDepartment {
+  const normalized = (title || "").toLowerCase();
+
+  if (/(facilit|real estate|property|workplace services|operations)/.test(normalized)) {
+    return "facilities";
+  }
+
+  if (/(people|human resources|hr\b|talent|employee experience)/.test(normalized)) {
+    return "hr_people";
+  }
+
+  if (/(workplace|office manager|office operations|experience manager)/.test(normalized)) {
+    return "workplace";
+  }
+
+  if (/(food|beverage|dining|hospitality|culinary|cafeteria)/.test(normalized)) {
+    return "fnb";
+  }
+
+  if (/(chief|ceo|coo|cfo|founder|president|vice president|vp\b|director|general manager)/.test(normalized)) {
+    return "csuite";
+  }
+
+  return "other";
 }
 
 export function personaToApolloTitles(filters: SearchFilters): string[] {

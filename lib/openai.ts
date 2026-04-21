@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import { env } from "@/lib/env";
-import type { GeneratedPitch, LeadRecord } from "@/lib/types";
+import type { GeneratedPitch, LeadRecord, ToneSettings } from "@/lib/types";
 import { ensurePitchSpecificity, formatLocation } from "@/lib/utils";
 import { researchCompany } from "@/lib/tavily";
 
@@ -55,6 +55,29 @@ function buildBridgeInsight(record: LeadRecord): string {
   }
 
   return `${record.lead.companyName}'s ${formatLocation(record.company)} footprint makes convenience and consistent access a strong perk angle.`;
+}
+
+function buildToneInstructions(toneSettings?: ToneSettings | null): string {
+  if (!toneSettings) return "";
+
+  const sections = [
+    toneSettings.voiceDescription?.trim()
+      ? `Preferred voice:\n${toneSettings.voiceDescription.trim()}`
+      : "",
+    toneSettings.doExamples?.trim()
+      ? `Do emulate:\n${toneSettings.doExamples.trim()}`
+      : "",
+    toneSettings.dontExamples?.trim()
+      ? `Avoid:\n${toneSettings.dontExamples.trim()}`
+      : "",
+    toneSettings.sampleEmail?.trim()
+      ? `Reference sample:\n${toneSettings.sampleEmail.trim()}`
+      : ""
+  ].filter(Boolean);
+
+  if (sections.length === 0) return "";
+
+  return ["Team tone-of-voice guidance:", ...sections].join("\n\n");
 }
 
 function buildFallbackPitch(record: LeadRecord, talkingPointsOverride?: string): GeneratedPitch {
@@ -113,7 +136,8 @@ function buildFallbackPitch(record: LeadRecord, talkingPointsOverride?: string):
 async function generateFollowUpPitch(
   record: LeadRecord,
   talkingPointsOverride?: string,
-  step: 2 | 3 = 2
+  step: 2 | 3 = 2,
+  toneSettings?: ToneSettings | null
 ): Promise<GeneratedPitch> {
   const bridge = buildBridgeInsight(record);
   const firstName = record.lead.name.split(" ")[0] || record.lead.name;
@@ -150,6 +174,8 @@ async function generateFollowUpPitch(
 
   const prompt = [
     ...stepInstructions,
+    "",
+    buildToneInstructions(toneSettings),
     "",
     "Prospect data:",
     `Company: ${record.lead.companyName}`,
@@ -194,10 +220,11 @@ async function generateFollowUpPitch(
 export async function generatePitch(
   record: LeadRecord,
   talkingPointsOverride?: string,
-  step: 1 | 2 | 3 = 1
+  step: 1 | 2 | 3 = 1,
+  toneSettings?: ToneSettings | null
 ): Promise<GeneratedPitch> {
   if (step === 2 || step === 3) {
-    return generateFollowUpPitch(record, talkingPointsOverride, step);
+    return generateFollowUpPitch(record, talkingPointsOverride, step, toneSettings);
   }
   const keyword = record.company.keywords[0] || "employee wellness";
   const bridge = buildBridgeInsight(record);
@@ -232,6 +259,8 @@ export async function generatePitch(
     webResearch.rawSnippets
       ? `Live web research about this company:\n${webResearch.rawSnippets}`
       : "No additional web research available.",
+    "",
+    buildToneInstructions(toneSettings),
     "",
     "Write a cold outreach email that feels like it came from a real person, not a marketing department.",
     "Rules:",

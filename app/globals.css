@@ -1826,3 +1826,380 @@ textarea {
 .ffGuidanceApply:hover {
   background: var(--ff-green-deep);
 }
+
+/* ==========================================================================
+   Farmers Fridge pipeline surfaces
+   ========================================================================== */
+
+.sectionCard {
+  padding: 24px 26px;
+  margin-top: 22px;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.sectionHeader h2 {
+  margin: 0;
+  font-family: var(--ff-font-serif);
+  font-size: 1.4rem;
+  font-weight: 500;
+  color: var(--ff-green-deep);
+  letter-spacing: -0.02em;
+}
+
+.sectionHeader p {
+  margin: 8px 0 0;
+  color: var(--ff-ink-soft);
+  font-size: 0.92rem;
+}
+
+.sectionHeader--filters {
+  align-items: center;
+}
+
+.sectionControls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.compactInput,
+.sectionControls select,
+.detailSelect select {
+  border: 1px solid var(--ff-line);
+  border-radius: var(--ff-radius-sm);
+  padding: 11px 14px;
+  background: #fff;
+  color: var(--ff-ink);
+}
+
+.compactInput {
+  min-width: 220px;
+}
+
+.locationGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.locationCard {
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+  border: 1px solid var(--ff-line);
+  border-radius: var(--ff-radius);
+  background: linear-gradient(180deg, #ffffff 0%, #fbf8f3 100%);
+  padding: 20px;
+  box-shadow: var(--ff-shadow-sm);
+}
+
+.locationCardBody {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.locationCardTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.locationCardTop h3 {
+  margin: 0;
+  font-family: var(--ff-font-serif);
+  font-size: 1.28rem;
+  font-weight: 500;
+  color: var(--ff-green-deep);
+  letter-spacing: -0.02em;
+}
+
+.locationCardTop p {
+  margin: 6px 0 0;
+  color: var(--ff-ink-soft);
+  font-size: 0.92rem;
+}
+
+.locationMeta,
+.locationCounts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+  color: var(--ff-ink-soft);
+  font-size: 0.88rem;
+}
+
+.locationMeta span,
+.locationCounts span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid var(--ff-line-soft);
+}
+
+.locationCounts--detail {
+  margin-top: 18px;
+}
+
+.cardActionRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.backLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ff-green);
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.detailToolbarCard {
+  background: var(--panel);
+  border: 1px solid var(--ff-line);
+  border-radius: var(--ff-radius);
+  box-shadow: var(--ff-shadow);
+  padding: 20px 24px;
+  margin-bottom: 18px;
+}
+
+.detailToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 14px;
+}
+
+.detailSelect {
+  display: grid;
+  gap: 8px;
+  min-width: 160px;
+}
+
+.detailSelect label {
+  color: var(--ff-green);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+}
+
+.detailSelect--pitch {
+  margin-left: auto;
+}
+
+.detailGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.detailNotes {
+  width: 100%;
+  min-height: 230px;
+  border: 1px solid var(--ff-line);
+  border-radius: var(--ff-radius-sm);
+  padding: 14px 15px;
+  resize: vertical;
+  line-height: 1.7;
+  margin-bottom: 14px;
+}
+
+.departmentPills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.contactTable .tableHeader,
+.contactTable .tableRow {
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.4fr) minmax(0, 1.3fr) minmax(0, 1fr) 132px;
+}
+
+.emailWorkbench,
+.toneGrid {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.1fr);
+  gap: 18px;
+}
+
+.emailListPane,
+.emailEditorPane,
+.toneEditor {
+  overflow: hidden;
+}
+
+.emailList {
+  display: grid;
+  gap: 12px;
+  padding: 0 18px 18px;
+}
+
+.emailRowCard {
+  width: 100%;
+  border: 1px solid var(--ff-line);
+  border-radius: var(--ff-radius-sm);
+  background: #fff;
+  padding: 16px;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+}
+
+.emailRowCard:hover {
+  transform: translateY(-1px);
+  border-color: var(--ff-green);
+  box-shadow: var(--ff-shadow-sm);
+}
+
+.emailRowCard.active {
+  border-color: var(--ff-green);
+  background: linear-gradient(180deg, #ffffff 0%, var(--ff-mint) 100%);
+}
+
+.emailRowTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.emailRowTop strong {
+  font-size: 1rem;
+  color: var(--ff-ink);
+  line-height: 1.4;
+}
+
+.emailRowMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+  color: var(--ff-ink-soft);
+  font-size: 0.84rem;
+}
+
+.emailRowCard p {
+  margin: 12px 0 0;
+  color: var(--ff-ink-soft);
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  white-space: nowrap;
+}
+
+.statusBadge--generated {
+  background: #e8eefc;
+  color: #2a56c6;
+}
+
+.statusBadge--approved {
+  background: var(--ff-mint);
+  color: var(--ff-green-deep);
+}
+
+.statusBadge--sent {
+  background: #f6ecd4;
+  color: #7a5415;
+}
+
+.summaryList {
+  display: grid;
+  gap: 12px;
+}
+
+.summaryRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--ff-line);
+  border-radius: var(--ff-radius-sm);
+  background: #fff;
+}
+
+.summaryRow span {
+  color: var(--ff-ink-soft);
+  font-size: 0.92rem;
+}
+
+.summaryRow strong {
+  color: var(--ff-green-deep);
+  font-size: 0.96rem;
+}
+
+@media (max-width: 1180px) {
+  .locationGrid,
+  .detailGrid,
+  .emailWorkbench,
+  .toneGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .detailSelect--pitch {
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  .sectionCard {
+    padding: 18px;
+  }
+
+  .sectionHeader,
+  .sectionHeader--filters,
+  .cardActionRow,
+  .detailToolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .compactInput {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .locationCard {
+    padding: 16px;
+  }
+
+  .locationCardTop,
+  .emailRowTop {
+    flex-direction: column;
+  }
+}

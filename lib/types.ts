@@ -20,6 +20,8 @@ export interface Lead {
   companyName: string;
   companyDomain?: string;
   organizationId?: string;
+  department?: ContactDepartment;
+  locationId?: string;
 }
 
 export interface CompanyFirmographics {
@@ -75,4 +77,98 @@ export interface GmailDraftPayload {
   to: string;
   subject: string;
   body: string;
+}
+
+// ─── Saved locations + pipeline ──────────────────────────────────────────────
+
+export type LocationType =
+  | "hospital"
+  | "corporate"
+  | "university"
+  | "gym"
+  | "airport"
+  | "other";
+
+export type PipelineStage = "prospect" | "meeting" | "won" | "lost";
+
+export type PitchType = "farmers_fridge" | "vending" | "catering";
+
+export type ContactDepartment =
+  | "facilities"
+  | "hr_people"
+  | "workplace"
+  | "fnb"
+  | "csuite"
+  | "other";
+
+export interface SavedLocation {
+  id: string;
+  organizationId?: string;
+  companyName: string;
+  companyDomain?: string;
+  industry?: string;
+  employeeCount?: number;
+  hqCity?: string;
+  hqState?: string;
+  hqCountry?: string;
+  about?: string;
+  category?: string;
+  locationType: LocationType;
+  pipelineStage: PipelineStage;
+  pitchType: PitchType;
+  notes?: string;
+  deliveryZone: DeliveryZone;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SavedLocationSummary extends SavedLocation {
+  contactsCount: number;
+  emailsCount: number;
+}
+
+export interface DashboardStats {
+  locationsCount: number;
+  draftsCount: number;
+  wonCount: number;
+  pipelineByStage: Record<PipelineStage, number>;
+  byLocationType: Record<LocationType, number>;
+}
+
+// ─── Emails ──────────────────────────────────────────────────────────────────
+
+export type EmailStatus = "generated" | "approved" | "sent";
+
+export interface StoredEmail {
+  id: string;
+  locationId?: string;
+  leadId?: string;
+  contactName?: string;
+  contactEmail?: string;
+  contactTitle?: string;
+  companyName?: string;
+  locationType?: LocationType;
+  sequenceStep: number;
+  subject: string;
+  body: string;
+  status: EmailStatus;
+  gmailDraftUrl?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LocationDetail {
+  location: SavedLocation;
+  contacts: LeadRecord[];
+  emails: StoredEmail[];
+}
+
+// ─── Tone of voice ───────────────────────────────────────────────────────────
+
+export interface ToneSettings {
+  voiceDescription: string;
+  doExamples: string;
+  dontExamples: string;
+  sampleEmail: string;
+  updatedAt?: string;
 }

@@ -1,0 +1,75 @@
+export const dynamic = "force-dynamic";
+
+import { NextResponse } from "next/server";
+import { z, ZodError } from "zod";
+import { deleteSavedLocation, getLocationDetail, updateSavedLocation } from "@/lib/db";
+
+const updateSchema = z.object({
+  about: z.string().optional(),
+  category: z.string().optional(),
+  notes: z.string().optional(),
+  locationType: z.enum(["hospital", "corporate", "university", "gym", "airport", "other"]).optional(),
+  pipelineStage: z.enum(["prospect", "meeting", "won", "lost"]).optional(),
+  pitchType: z.enum(["farmers_fridge", "vending", "catering"]).optional()
+});
+
+export async function GET(
+  _request: Request,
+  context: { params: { id: string } }
+) {
+  try {
+    const detail = await getLocationDetail(context.params.id);
+
+    if (!detail) {
+      return NextResponse.json({ error: "Location not found." }, { status: 404 });
+    }
+
+    return NextResponse.json(detail);
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Failed to load location." },
+      { status: 500 }
+    );
+  }
+}
+
+export async function PATCH(
+  request: Request,
+  context: { params: { id: string } }
+) {
+  try {
+    const body = await request.json();
+    const updates = updateSchema.parse(body);
+    const location = await updateSavedLocation(context.params.id, updates);
+
+    if (!location) {
+      return NextResponse.json({ error: "Location not found." }, { status: 404 });
+    }
+
+    return NextResponse.json({ location });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      return NextResponse.json({ error: error.errors[0]?.message ?? "Invalid request." }, { status: 400 });
+    }
+
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Failed to update location." },
+      { status: 500 }
+    );
+  }
+}
+
+export async function DELETE(
+  _request: Request,
+  context: { params: { id: string } }
+) {
+  try {
+    await deleteSavedLocation(context.params.id);
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Failed to delete location." },
+      { status: 500 }
+    );
+  }
+}

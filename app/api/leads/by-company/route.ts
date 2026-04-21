@@ -38,7 +38,8 @@ const companySchema = z.object({
 const bodySchema = z.object({
   filters: searchFiltersSchema,
   company: companySchema,
-  searchQuery: z.string().min(2).optional()
+  searchQuery: z.string().min(2).optional(),
+  locationId: z.string().min(1).optional()
 });
 
 export async function POST(request: Request) {
@@ -47,7 +48,9 @@ export async function POST(request: Request) {
     const payload = bodySchema.parse(body);
     const leads = await searchLeadsForCompany(payload.filters, payload.company);
 
-    void cacheLeads(leads, payload.searchQuery || payload.company.name);
+    void cacheLeads(leads, payload.searchQuery || payload.company.name, {
+      locationId: payload.locationId
+    });
 
     return NextResponse.json({ company: payload.company, leads, fromCache: false });
   } catch (error) {

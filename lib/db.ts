@@ -1,11 +1,46 @@
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 import { env } from "@/lib/env";
-import type { GeneratedPitch, LeadRecord } from "@/lib/types";
+import type {
+  DashboardStats,
+  EmailStatus,
+  GeneratedPitch,
+  LeadRecord,
+  LocationDetail,
+  LocationType,
+  PipelineStage,
+  PitchType,
+  ProspectCompany,
+  SavedLocation,
+  SavedLocationSummary,
+  StoredEmail,
+  ToneSettings
+} from "@/lib/types";
+import { inferContactDepartment, inferLocationType } from "@/lib/utils";
 
 declare global {
   // eslint-disable-next-line no-var
   var __pgPool: Pool | undefined;
 }
+
+type SavedLocationFilters = {
+  query?: string;
+  locationType?: LocationType | "all";
+  pipelineStage?: PipelineStage | "all";
+  limit?: number;
+};
+
+type EmailFilters = {
+  query?: string;
+  status?: EmailStatus | "all";
+  locationId?: string;
+  limit?: number;
+};
+
+type SavedLocationInput = Omit<SavedLocation, "createdAt" | "updatedAt">;
+
+type StoredEmailInput = Omit<StoredEmail, "id" | "createdAt" | "updatedAt" | "status"> & {
+  status?: EmailStatus;
+};
 
 export function getPool(): Pool {
   if (!global.__pgPool) {
@@ -15,10 +50,19 @@ export function getPool(): Pool {
       max: 10
     });
   }
+
   return global.__pgPool;
 }
 
-// ─── Leads ────────────────────────────────────────────────────────────────────
+function toIso(value: unknown): string {
+  if (!value) return new Date().toISOString();
+  return new Date(value as string | number | Date).toISOString();
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item));
+}
 
 function rowToLeadRecord(row: Record<string, unknown>): LeadRecord {
   return {
@@ -30,7 +74,9 @@ function rowToLeadRecord(row: Record<string, unknown>): LeadRecord {
       linkedinUrl: (row.linkedin_url as string) ?? undefined,
       companyName: row.company_name as string,
       companyDomain: (row.company_domain as string) ?? undefined,
-      organizationId: (row.organization_id as string) ?? undefined
+      organizationId: (row.organization_id as string) ?? undefined,
+      department: (row.department as LeadRecord["lead"]["department"]) ?? undefined,
+      locationId: (row.location_id as string) ?? undefined
     },
     company: {
       industry: (row.industry as string) ?? undefined,
@@ -38,88 +84,158 @@ function rowToLeadRecord(row: Record<string, unknown>): LeadRecord {
       hqCity: (row.hq_city as string) ?? undefined,
       hqState: (row.hq_state as string) ?? undefined,
       hqCountry: (row.hq_country as string) ?? undefined,
-      keywords: (row.keywords as string[]) ?? [],
-      techStack: (row.tech_stack as string[]) ?? [],
+      keywords: asStringArray(row.keywords),
+      techStack: asStringArray(row.tech_stack),
       about: (row.about as string) ?? undefined,
       deliveryZone: (row.delivery_zone as LeadRecord["company"]["deliveryZone"]) ?? "Other"
     },
-    priorityScore: (row.priority_score as number) ?? 0
+    priorityScore: Number(row.priority_score ?? 0)
   };
 }
 
-/** Upsert a batch of leads — replaces on id conflict. */
-export async function cacheLeads(records: LeadRecord[], searchQuery: string): Promise<void> {
-  if (records.length === 0) return;
+function rowToSavedLocation(row: Record<string, unknown>): SavedLocation {
+  return {
+    id: row.id as string,
+    organizationId: (row.organization_id as string) ?? undefined,
+    companyName: row.company_name as string,
+    companyDomain: (row.company_domain as string) ?? undefined,
+    industry: (row.industry as string) ?? undefined,
+    employeeCount: (row.employee_count as number) ?? undefined,
+    hqCity: (row.hq_city as string) ?? undefined,
+    hqState: (row.hq_state as string) ?? undefined,
+    hqCountry: (row.hq_country as string) ?? undefined,
+    about: (row.about as string) ?? undefined,
+    category: (row.category as string) ?? undefined,
+    locationType: (row.location_type as SavedLocation["locationType"]) ?? "other",
+    pipelineStage: (row.pipeline_stage as SavedLocation["pipelineStage"]) ?? "prospect",
+    pitchType: (row.pitch_type as SavedLocation["pitchType"]) ?? "farmers_fridge",
+    notes: (row.notes as string) ?? undefined,
+    deliveryZone: (row.delivery_zone as SavedLocation["deliveryZone"]) ?? "Other",
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at)
+  };
+}
 
-  const pool = getPool();
-  const client = await pool.connect();
+function rowToSavedLocationSummary(row: Record<string, unknown>): SavedLocationSummary {
+  return {
+    ...rowToSavedLocation(row),
+    contactsCount: Number(row.contacts_count ?? 0),
+    emailsCount: Number(row.emails_count ?? 0)
+  };
+}
+
+function rowToStoredEmail(row: Record<string, unknown>): StoredEmail {
+  return {
+    id: row.id as string,
+    locationId: (row.location_id as string) ?? undefined,
+    leadId: (row.lead_id as string) ?? undefined,
+    contactName: (row.contact_name as string) ?? undefined,
+    contactEmail: (row.contact_email as string) ?? undefined,
+    contactTitle: (row.contact_title as string) ?? undefined,
+    companyName: (row.company_name as string) ?? undefined,
+    locationType: (row.location_type as StoredEmail["locationType"]) ?? undefined,
+    sequenceStep: Number(row.sequence_step ?? 0),
+    subject: (row.subject as string) ?? "",
+    body: (row.body as string) ?? "",
+    status: (row.status as EmailStatus) ?? "generated",
+    gmailDraftUrl: (row.gmail_draft_url as string) ?? undefined,
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at)
+  };
+}
+
+async function withTransaction<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
+  const client = await getPool().connect();
   try {
     await client.query("BEGIN");
-    for (const r of records) {
-      await client.query(
-        `INSERT INTO leads (
-          id, name, email, title, linkedin_url, company_name, company_domain, organization_id,
-          industry, employee_count, hq_city, hq_state, hq_country, keywords, tech_stack, about,
-          delivery_zone, priority_score, search_query, fetched_at
-        ) VALUES (
-          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,NOW()
-        )
-        ON CONFLICT (id) DO UPDATE SET
-          name = EXCLUDED.name,
-          email = EXCLUDED.email,
-          title = EXCLUDED.title,
-          linkedin_url = EXCLUDED.linkedin_url,
-          company_name = EXCLUDED.company_name,
-          company_domain = EXCLUDED.company_domain,
-          organization_id = EXCLUDED.organization_id,
-          industry = EXCLUDED.industry,
-          employee_count = EXCLUDED.employee_count,
-          hq_city = EXCLUDED.hq_city,
-          hq_state = EXCLUDED.hq_state,
-          hq_country = EXCLUDED.hq_country,
-          keywords = EXCLUDED.keywords,
-          tech_stack = EXCLUDED.tech_stack,
-          about = EXCLUDED.about,
-          delivery_zone = EXCLUDED.delivery_zone,
-          priority_score = EXCLUDED.priority_score,
-          search_query = EXCLUDED.search_query,
-          fetched_at = NOW()`,
-        [
-          r.lead.id,
-          r.lead.name,
-          r.lead.email || null,
-          r.lead.title || null,
-          r.lead.linkedinUrl || null,
-          r.lead.companyName,
-          r.lead.companyDomain || null,
-          r.lead.organizationId || null,
-          r.company.industry || null,
-          r.company.employeeCount ?? null,
-          r.company.hqCity || null,
-          r.company.hqState || null,
-          r.company.hqCountry || null,
-          r.company.keywords,
-          r.company.techStack,
-          r.company.about || null,
-          r.company.deliveryZone,
-          r.priorityScore,
-          searchQuery
-        ]
-      );
-    }
+    const result = await work(client);
     await client.query("COMMIT");
+    return result;
   } catch (error) {
     await client.query("ROLLBACK");
-    console.error("[db] cacheLeads error:", error instanceof Error ? error.message : error);
+    throw error;
   } finally {
     client.release();
   }
 }
 
-export async function getCachedLeads(
+// ─── Leads ────────────────────────────────────────────────────────────────────
+
+export async function cacheLeads(
+  records: LeadRecord[],
   searchQuery: string,
-  maxAgeHours?: number
-): Promise<LeadRecord[] | null> {
+  options?: { locationId?: string }
+): Promise<void> {
+  if (records.length === 0) return;
+
+  try {
+    await withTransaction(async (client) => {
+      for (const record of records) {
+        const locationId = options?.locationId ?? record.lead.locationId ?? null;
+        const department = record.lead.department ?? inferContactDepartment(record.lead.title);
+
+        await client.query(
+          `INSERT INTO leads (
+            id, name, email, title, linkedin_url, company_name, company_domain, organization_id,
+            industry, employee_count, hq_city, hq_state, hq_country, keywords, tech_stack, about,
+            delivery_zone, priority_score, search_query, fetched_at, location_id, department
+          ) VALUES (
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,NOW(),$20,$21
+          )
+          ON CONFLICT (id) DO UPDATE SET
+            name = EXCLUDED.name,
+            email = EXCLUDED.email,
+            title = EXCLUDED.title,
+            linkedin_url = EXCLUDED.linkedin_url,
+            company_name = EXCLUDED.company_name,
+            company_domain = EXCLUDED.company_domain,
+            organization_id = EXCLUDED.organization_id,
+            industry = EXCLUDED.industry,
+            employee_count = EXCLUDED.employee_count,
+            hq_city = EXCLUDED.hq_city,
+            hq_state = EXCLUDED.hq_state,
+            hq_country = EXCLUDED.hq_country,
+            keywords = EXCLUDED.keywords,
+            tech_stack = EXCLUDED.tech_stack,
+            about = EXCLUDED.about,
+            delivery_zone = EXCLUDED.delivery_zone,
+            priority_score = EXCLUDED.priority_score,
+            search_query = EXCLUDED.search_query,
+            fetched_at = NOW(),
+            location_id = COALESCE(EXCLUDED.location_id, leads.location_id),
+            department = COALESCE(EXCLUDED.department, leads.department)`,
+          [
+            record.lead.id,
+            record.lead.name,
+            record.lead.email || null,
+            record.lead.title || null,
+            record.lead.linkedinUrl || null,
+            record.lead.companyName,
+            record.lead.companyDomain || null,
+            record.lead.organizationId || null,
+            record.company.industry || null,
+            record.company.employeeCount ?? null,
+            record.company.hqCity || null,
+            record.company.hqState || null,
+            record.company.hqCountry || null,
+            record.company.keywords,
+            record.company.techStack,
+            record.company.about || null,
+            record.company.deliveryZone,
+            record.priorityScore,
+            searchQuery,
+            locationId,
+            department
+          ]
+        );
+      }
+    });
+  } catch (error) {
+    console.error("[db] cacheLeads error:", error instanceof Error ? error.message : error);
+  }
+}
+
+export async function getCachedLeads(searchQuery: string, maxAgeHours?: number): Promise<LeadRecord[] | null> {
   const pool = getPool();
   const params: unknown[] = [searchQuery];
   let sql = "SELECT * FROM leads WHERE search_query = $1";
@@ -128,12 +244,13 @@ export async function getCachedLeads(
     params.push(new Date(Date.now() - maxAgeHours * 60 * 60 * 1000).toISOString());
     sql += ` AND fetched_at >= $${params.length}`;
   }
+
   sql += " ORDER BY priority_score DESC";
 
   try {
     const { rows } = await pool.query(sql, params);
     if (rows.length === 0) return null;
-    return rows.map(rowToLeadRecord);
+    return rows.map((row) => rowToLeadRecord(row as Record<string, unknown>));
   } catch (error) {
     console.error("[db] getCachedLeads error:", error instanceof Error ? error.message : error);
     return null;
@@ -143,9 +260,12 @@ export async function getCachedLeads(
 export async function getRecentSearches(
   limit = 5
 ): Promise<Array<{ query: string; count: number; fetchedAt: string }>> {
-  const pool = getPool();
   try {
-    const { rows } = await pool.query<{ search_query: string; count: string; fetched_at: Date }>(
+    const { rows } = await getPool().query<{
+      search_query: string;
+      count: string;
+      fetched_at: Date;
+    }>(
       `SELECT search_query, COUNT(*)::text AS count, MAX(fetched_at) AS fetched_at
        FROM leads
        WHERE search_query IS NOT NULL
@@ -154,6 +274,7 @@ export async function getRecentSearches(
        LIMIT $1`,
       [limit]
     );
+
     return rows.map((row) => ({
       query: row.search_query,
       count: Number(row.count),
@@ -165,6 +286,19 @@ export async function getRecentSearches(
   }
 }
 
+export async function getLocationContacts(locationId: string): Promise<LeadRecord[]> {
+  try {
+    const { rows } = await getPool().query(
+      "SELECT * FROM leads WHERE location_id = $1 ORDER BY priority_score DESC, name ASC",
+      [locationId]
+    );
+    return rows.map((row) => rowToLeadRecord(row as Record<string, unknown>));
+  } catch (error) {
+    console.error("[db] getLocationContacts error:", error instanceof Error ? error.message : error);
+    return [];
+  }
+}
+
 export async function updateLeadContact(
   leadId: string,
   updates: {
@@ -172,6 +306,7 @@ export async function updateLeadContact(
     linkedinUrl?: string;
     companyDomain?: string;
     organizationId?: string;
+    locationId?: string;
   }
 ): Promise<void> {
   const sets: string[] = [];
@@ -193,17 +328,18 @@ export async function updateLeadContact(
     params.push(updates.organizationId || null);
     sets.push(`organization_id = $${params.length}`);
   }
+  if (updates.locationId !== undefined) {
+    params.push(updates.locationId || null);
+    sets.push(`location_id = $${params.length}`);
+  }
 
   if (sets.length === 0) return;
 
-  sets.push(`fetched_at = NOW()`);
+  sets.push("fetched_at = NOW()");
   params.push(leadId);
 
   try {
-    await getPool().query(
-      `UPDATE leads SET ${sets.join(", ")} WHERE id = $${params.length}`,
-      params
-    );
+    await getPool().query(`UPDATE leads SET ${sets.join(", ")} WHERE id = $${params.length}`, params);
   } catch (error) {
     console.error("[db] updateLeadContact error:", error instanceof Error ? error.message : error);
   }
@@ -212,40 +348,31 @@ export async function updateLeadContact(
 // ─── Pitches ──────────────────────────────────────────────────────────────────
 
 export async function cachePitch(leadId: string, pitch: GeneratedPitch): Promise<void> {
-  const pool = getPool();
-  const client = await pool.connect();
   try {
-    await client.query("BEGIN");
-    await client.query("DELETE FROM pitches WHERE lead_id = $1", [leadId]);
-    await client.query(
-      `INSERT INTO pitches (
-        lead_id, subject, body, talking_points, bridge_insight, summary, pain_points, variable_evidence
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [
-        leadId,
-        pitch.subject,
-        pitch.body,
-        pitch.talkingPoints,
-        pitch.bridgeInsight,
-        pitch.summary,
-        pitch.painPoints,
-        pitch.variableEvidence
-      ]
-    );
-    await client.query("COMMIT");
+    await withTransaction(async (client) => {
+      await client.query("DELETE FROM pitches WHERE lead_id = $1", [leadId]);
+      await client.query(
+        `INSERT INTO pitches (
+          lead_id, subject, body, talking_points, bridge_insight, summary, pain_points, variable_evidence
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [
+          leadId,
+          pitch.subject,
+          pitch.body,
+          pitch.talkingPoints,
+          pitch.bridgeInsight,
+          pitch.summary,
+          pitch.painPoints,
+          pitch.variableEvidence
+        ]
+      );
+    });
   } catch (error) {
-    await client.query("ROLLBACK");
     console.error("[db] cachePitch error:", error instanceof Error ? error.message : error);
-  } finally {
-    client.release();
   }
 }
 
-export async function getCachedPitch(
-  leadId: string,
-  maxAgeHours?: number
-): Promise<GeneratedPitch | null> {
-  const pool = getPool();
+export async function getCachedPitch(leadId: string, maxAgeHours?: number): Promise<GeneratedPitch | null> {
   const params: unknown[] = [leadId];
   let sql = "SELECT * FROM pitches WHERE lead_id = $1";
 
@@ -253,23 +380,518 @@ export async function getCachedPitch(
     params.push(new Date(Date.now() - maxAgeHours * 60 * 60 * 1000).toISOString());
     sql += ` AND created_at >= $${params.length}`;
   }
+
   sql += " ORDER BY created_at DESC LIMIT 1";
 
   try {
-    const { rows } = await pool.query(sql, params);
+    const { rows } = await getPool().query(sql, params);
     if (rows.length === 0) return null;
-    const row = rows[0]!;
+    const row = rows[0] as Record<string, unknown>;
+
     return {
-      subject: row.subject ?? "",
-      body: row.body ?? "",
-      talkingPoints: row.talking_points ?? "",
-      bridgeInsight: row.bridge_insight ?? "",
-      summary: row.summary ?? "",
-      painPoints: row.pain_points ?? [],
-      variableEvidence: row.variable_evidence ?? []
+      subject: (row.subject as string) ?? "",
+      body: (row.body as string) ?? "",
+      talkingPoints: (row.talking_points as string) ?? "",
+      bridgeInsight: (row.bridge_insight as string) ?? "",
+      summary: (row.summary as string) ?? "",
+      painPoints: asStringArray(row.pain_points),
+      variableEvidence: asStringArray(row.variable_evidence)
     };
   } catch (error) {
     console.error("[db] getCachedPitch error:", error instanceof Error ? error.message : error);
     return null;
   }
+}
+
+// ─── Saved locations ──────────────────────────────────────────────────────────
+
+export async function upsertSavedLocation(input: SavedLocationInput): Promise<SavedLocation> {
+  const params = [
+    input.id,
+    input.organizationId || null,
+    input.companyName,
+    input.companyDomain || null,
+    input.industry || null,
+    input.employeeCount ?? null,
+    input.hqCity || null,
+    input.hqState || null,
+    input.hqCountry || null,
+    input.about || null,
+    input.category || null,
+    input.locationType,
+    input.pipelineStage,
+    input.pitchType,
+    input.notes || null,
+    input.deliveryZone
+  ];
+
+  const { rows } = await getPool().query(
+    `INSERT INTO saved_locations (
+      id, organization_id, company_name, company_domain, industry, employee_count,
+      hq_city, hq_state, hq_country, about, category, location_type, pipeline_stage,
+      pitch_type, notes, delivery_zone
+    ) VALUES (
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16
+    )
+    ON CONFLICT (id) DO UPDATE SET
+      organization_id = EXCLUDED.organization_id,
+      company_name = EXCLUDED.company_name,
+      company_domain = EXCLUDED.company_domain,
+      industry = EXCLUDED.industry,
+      employee_count = EXCLUDED.employee_count,
+      hq_city = EXCLUDED.hq_city,
+      hq_state = EXCLUDED.hq_state,
+      hq_country = EXCLUDED.hq_country,
+      about = EXCLUDED.about,
+      category = EXCLUDED.category,
+      location_type = EXCLUDED.location_type,
+      pipeline_stage = COALESCE(saved_locations.pipeline_stage, EXCLUDED.pipeline_stage),
+      pitch_type = COALESCE(saved_locations.pitch_type, EXCLUDED.pitch_type),
+      notes = COALESCE(saved_locations.notes, EXCLUDED.notes),
+      delivery_zone = EXCLUDED.delivery_zone,
+      updated_at = NOW()
+    RETURNING *`,
+    params
+  );
+
+  return rowToSavedLocation(rows[0] as Record<string, unknown>);
+}
+
+export async function saveProspectCompanyAsLocation(company: ProspectCompany): Promise<SavedLocation> {
+  return upsertSavedLocation({
+    id: company.id,
+    organizationId: company.id,
+    companyName: company.name,
+    companyDomain: company.domain,
+    industry: company.company.industry,
+    employeeCount: company.company.employeeCount,
+    hqCity: company.company.hqCity,
+    hqState: company.company.hqState,
+    hqCountry: company.company.hqCountry,
+    about: company.company.about,
+    category: company.company.industry || company.company.keywords[0] || undefined,
+    locationType: inferLocationType({
+      name: company.name,
+      industry: company.company.industry,
+      about: company.company.about,
+      keywords: company.company.keywords
+    }),
+    pipelineStage: "prospect",
+    pitchType: "farmers_fridge",
+    notes: "",
+    deliveryZone: company.company.deliveryZone
+  });
+}
+
+export async function listSavedLocations(filters: SavedLocationFilters = {}): Promise<SavedLocationSummary[]> {
+  const params: unknown[] = [];
+  const conditions: string[] = [];
+
+  if (filters.query?.trim()) {
+    params.push(`%${filters.query.trim()}%`);
+    conditions.push(
+      `(sl.company_name ILIKE $${params.length} OR sl.company_domain ILIKE $${params.length} OR COALESCE(sl.category, '') ILIKE $${params.length})`
+    );
+  }
+
+  if (filters.locationType && filters.locationType !== "all") {
+    params.push(filters.locationType);
+    conditions.push(`sl.location_type = $${params.length}`);
+  }
+
+  if (filters.pipelineStage && filters.pipelineStage !== "all") {
+    params.push(filters.pipelineStage);
+    conditions.push(`sl.pipeline_stage = $${params.length}`);
+  }
+
+  params.push(filters.limit ?? 100);
+
+  const sql = `
+    SELECT
+      sl.*,
+      COALESCE(lc.contacts_count, 0) AS contacts_count,
+      COALESCE(ec.emails_count, 0) AS emails_count
+    FROM saved_locations sl
+    LEFT JOIN (
+      SELECT location_id, COUNT(*)::int AS contacts_count
+      FROM leads
+      WHERE location_id IS NOT NULL
+      GROUP BY location_id
+    ) lc ON lc.location_id = sl.id
+    LEFT JOIN (
+      SELECT location_id, COUNT(*)::int AS emails_count
+      FROM emails
+      WHERE location_id IS NOT NULL
+      GROUP BY location_id
+    ) ec ON ec.location_id = sl.id
+    ${conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""}
+    ORDER BY sl.updated_at DESC
+    LIMIT $${params.length}
+  `;
+
+  try {
+    const { rows } = await getPool().query(sql, params);
+    return rows.map((row) => rowToSavedLocationSummary(row as Record<string, unknown>));
+  } catch (error) {
+    console.error("[db] listSavedLocations error:", error instanceof Error ? error.message : error);
+    return [];
+  }
+}
+
+export async function getSavedLocationById(id: string): Promise<SavedLocation | null> {
+  try {
+    const { rows } = await getPool().query("SELECT * FROM saved_locations WHERE id = $1 LIMIT 1", [id]);
+    if (rows.length === 0) return null;
+    return rowToSavedLocation(rows[0] as Record<string, unknown>);
+  } catch (error) {
+    console.error("[db] getSavedLocationById error:", error instanceof Error ? error.message : error);
+    return null;
+  }
+}
+
+export async function getLocationDetail(id: string): Promise<LocationDetail | null> {
+  const location = await getSavedLocationById(id);
+  if (!location) return null;
+
+  const [contacts, emails] = await Promise.all([getLocationContacts(id), getLocationEmails(id)]);
+  return { location, contacts, emails };
+}
+
+export async function updateSavedLocation(
+  id: string,
+  updates: Partial<
+    Pick<SavedLocation, "about" | "category" | "notes" | "locationType" | "pipelineStage" | "pitchType">
+  >
+): Promise<SavedLocation | null> {
+  const sets: string[] = [];
+  const params: unknown[] = [];
+
+  if (updates.about !== undefined) {
+    params.push(updates.about || null);
+    sets.push(`about = $${params.length}`);
+  }
+  if (updates.category !== undefined) {
+    params.push(updates.category || null);
+    sets.push(`category = $${params.length}`);
+  }
+  if (updates.notes !== undefined) {
+    params.push(updates.notes || null);
+    sets.push(`notes = $${params.length}`);
+  }
+  if (updates.locationType !== undefined) {
+    params.push(updates.locationType);
+    sets.push(`location_type = $${params.length}`);
+  }
+  if (updates.pipelineStage !== undefined) {
+    params.push(updates.pipelineStage);
+    sets.push(`pipeline_stage = $${params.length}`);
+  }
+  if (updates.pitchType !== undefined) {
+    params.push(updates.pitchType);
+    sets.push(`pitch_type = $${params.length}`);
+  }
+
+  if (sets.length === 0) {
+    return getSavedLocationById(id);
+  }
+
+  sets.push("updated_at = NOW()");
+  params.push(id);
+
+  try {
+    const { rows } = await getPool().query(
+      `UPDATE saved_locations SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`,
+      params
+    );
+    if (rows.length === 0) return null;
+    return rowToSavedLocation(rows[0] as Record<string, unknown>);
+  } catch (error) {
+    console.error("[db] updateSavedLocation error:", error instanceof Error ? error.message : error);
+    return null;
+  }
+}
+
+export async function deleteSavedLocation(id: string): Promise<void> {
+  try {
+    await getPool().query("DELETE FROM saved_locations WHERE id = $1", [id]);
+  } catch (error) {
+    console.error("[db] deleteSavedLocation error:", error instanceof Error ? error.message : error);
+  }
+}
+
+export async function getDashboardStats(): Promise<DashboardStats> {
+  const stats: DashboardStats = {
+    locationsCount: 0,
+    draftsCount: 0,
+    wonCount: 0,
+    pipelineByStage: {
+      prospect: 0,
+      meeting: 0,
+      won: 0,
+      lost: 0
+    },
+    byLocationType: {
+      hospital: 0,
+      corporate: 0,
+      university: 0,
+      gym: 0,
+      airport: 0,
+      other: 0
+    }
+  };
+
+  try {
+    const [summaryResult, stageResult, typeResult] = await Promise.all([
+      getPool().query<{
+        locations_count: string;
+        drafts_count: string;
+        won_count: string;
+      }>(
+        `SELECT
+          COUNT(*)::text AS locations_count,
+          (SELECT COUNT(*)::text FROM emails) AS drafts_count,
+          COUNT(*) FILTER (WHERE pipeline_stage = 'won')::text AS won_count
+         FROM saved_locations`
+      ),
+      getPool().query<{ pipeline_stage: PipelineStage; count: string }>(
+        `SELECT pipeline_stage, COUNT(*)::text AS count
+         FROM saved_locations
+         GROUP BY pipeline_stage`
+      ),
+      getPool().query<{ location_type: LocationType; count: string }>(
+        `SELECT location_type, COUNT(*)::text AS count
+         FROM saved_locations
+         GROUP BY location_type`
+      )
+    ]);
+
+    const summary = summaryResult.rows[0];
+    if (summary) {
+      stats.locationsCount = Number(summary.locations_count ?? 0);
+      stats.draftsCount = Number(summary.drafts_count ?? 0);
+      stats.wonCount = Number(summary.won_count ?? 0);
+    }
+
+    for (const row of stageResult.rows) {
+      stats.pipelineByStage[row.pipeline_stage] = Number(row.count);
+    }
+
+    for (const row of typeResult.rows) {
+      stats.byLocationType[row.location_type] = Number(row.count);
+    }
+
+    return stats;
+  } catch (error) {
+    console.error("[db] getDashboardStats error:", error instanceof Error ? error.message : error);
+    return stats;
+  }
+}
+
+// ─── Emails ───────────────────────────────────────────────────────────────────
+
+export async function getLocationEmails(locationId: string): Promise<StoredEmail[]> {
+  try {
+    const { rows } = await getPool().query(
+      "SELECT * FROM emails WHERE location_id = $1 ORDER BY updated_at DESC, sequence_step ASC",
+      [locationId]
+    );
+    return rows.map((row) => rowToStoredEmail(row as Record<string, unknown>));
+  } catch (error) {
+    console.error("[db] getLocationEmails error:", error instanceof Error ? error.message : error);
+    return [];
+  }
+}
+
+export async function listEmails(filters: EmailFilters = {}): Promise<StoredEmail[]> {
+  const params: unknown[] = [];
+  const conditions: string[] = [];
+
+  if (filters.query?.trim()) {
+    params.push(`%${filters.query.trim()}%`);
+    conditions.push(
+      `(COALESCE(subject, '') ILIKE $${params.length}
+        OR COALESCE(company_name, '') ILIKE $${params.length}
+        OR COALESCE(contact_name, '') ILIKE $${params.length}
+        OR COALESCE(contact_email, '') ILIKE $${params.length})`
+    );
+  }
+
+  if (filters.status && filters.status !== "all") {
+    params.push(filters.status);
+    conditions.push(`status = $${params.length}`);
+  }
+
+  if (filters.locationId) {
+    params.push(filters.locationId);
+    conditions.push(`location_id = $${params.length}`);
+  }
+
+  params.push(filters.limit ?? 200);
+
+  const sql = `
+    SELECT *
+    FROM emails
+    ${conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""}
+    ORDER BY updated_at DESC, sequence_step ASC
+    LIMIT $${params.length}
+  `;
+
+  try {
+    const { rows } = await getPool().query(sql, params);
+    return rows.map((row) => rowToStoredEmail(row as Record<string, unknown>));
+  } catch (error) {
+    console.error("[db] listEmails error:", error instanceof Error ? error.message : error);
+    return [];
+  }
+}
+
+export async function replaceEmailsForLead(
+  leadId: string,
+  emails: StoredEmailInput[]
+): Promise<StoredEmail[]> {
+  try {
+    return await withTransaction(async (client) => {
+      await client.query("DELETE FROM emails WHERE lead_id = $1", [leadId]);
+
+      const created: StoredEmail[] = [];
+      for (const email of emails) {
+        const { rows } = await client.query(
+          `INSERT INTO emails (
+            location_id, lead_id, contact_name, contact_email, contact_title, company_name,
+            location_type, sequence_step, subject, body, status, gmail_draft_url
+          ) VALUES (
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12
+          )
+          RETURNING *`,
+          [
+            email.locationId || null,
+            leadId,
+            email.contactName || null,
+            email.contactEmail || null,
+            email.contactTitle || null,
+            email.companyName || null,
+            email.locationType || null,
+            email.sequenceStep,
+            email.subject,
+            email.body,
+            email.status || "approved",
+            email.gmailDraftUrl || null
+          ]
+        );
+
+        created.push(rowToStoredEmail(rows[0] as Record<string, unknown>));
+      }
+
+      return created;
+    });
+  } catch (error) {
+    console.error("[db] replaceEmailsForLead error:", error instanceof Error ? error.message : error);
+    return [];
+  }
+}
+
+export async function updateEmail(
+  id: string,
+  updates: Partial<Pick<StoredEmail, "subject" | "body" | "status" | "gmailDraftUrl">>
+): Promise<StoredEmail | null> {
+  const sets: string[] = [];
+  const params: unknown[] = [];
+
+  if (updates.subject !== undefined) {
+    params.push(updates.subject);
+    sets.push(`subject = $${params.length}`);
+  }
+  if (updates.body !== undefined) {
+    params.push(updates.body);
+    sets.push(`body = $${params.length}`);
+  }
+  if (updates.status !== undefined) {
+    params.push(updates.status);
+    sets.push(`status = $${params.length}`);
+  }
+  if (updates.gmailDraftUrl !== undefined) {
+    params.push(updates.gmailDraftUrl || null);
+    sets.push(`gmail_draft_url = $${params.length}`);
+  }
+
+  if (sets.length === 0) {
+    return null;
+  }
+
+  sets.push("updated_at = NOW()");
+  params.push(id);
+
+  try {
+    const { rows } = await getPool().query(
+      `UPDATE emails SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`,
+      params
+    );
+    if (rows.length === 0) return null;
+    return rowToStoredEmail(rows[0] as Record<string, unknown>);
+  } catch (error) {
+    console.error("[db] updateEmail error:", error instanceof Error ? error.message : error);
+    return null;
+  }
+}
+
+// ─── Tone settings ────────────────────────────────────────────────────────────
+
+export async function getToneSettings(userId: number): Promise<ToneSettings> {
+  try {
+    const { rows } = await getPool().query(
+      "SELECT * FROM tone_settings WHERE user_id = $1 LIMIT 1",
+      [userId]
+    );
+
+    if (rows.length === 0) {
+      return {
+        voiceDescription: "",
+        doExamples: "",
+        dontExamples: "",
+        sampleEmail: ""
+      };
+    }
+
+    const row = rows[0] as Record<string, unknown>;
+    return {
+      voiceDescription: (row.voice_description as string) ?? "",
+      doExamples: (row.do_examples as string) ?? "",
+      dontExamples: (row.dont_examples as string) ?? "",
+      sampleEmail: (row.sample_email as string) ?? "",
+      updatedAt: toIso(row.updated_at)
+    };
+  } catch (error) {
+    console.error("[db] getToneSettings error:", error instanceof Error ? error.message : error);
+    return {
+      voiceDescription: "",
+      doExamples: "",
+      dontExamples: "",
+      sampleEmail: ""
+    };
+  }
+}
+
+export async function upsertToneSettings(userId: number, tone: ToneSettings): Promise<ToneSettings> {
+  const { rows } = await getPool().query(
+    `INSERT INTO tone_settings (
+      user_id, voice_description, do_examples, dont_examples, sample_email
+    ) VALUES ($1,$2,$3,$4,$5)
+    ON CONFLICT (user_id) DO UPDATE SET
+      voice_description = EXCLUDED.voice_description,
+      do_examples = EXCLUDED.do_examples,
+      dont_examples = EXCLUDED.dont_examples,
+      sample_email = EXCLUDED.sample_email,
+      updated_at = NOW()
+    RETURNING *`,
+    [userId, tone.voiceDescription, tone.doExamples, tone.dontExamples, tone.sampleEmail]
+  );
+
+  const row = rows[0] as Record<string, unknown>;
+  return {
+    voiceDescription: (row.voice_description as string) ?? "",
+    doExamples: (row.do_examples as string) ?? "",
+    dontExamples: (row.dont_examples as string) ?? "",
+    sampleEmail: (row.sample_email as string) ?? "",
+    updatedAt: toIso(row.updated_at)
+  };
 }
