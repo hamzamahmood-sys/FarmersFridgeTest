@@ -785,12 +785,31 @@ export function OutreachDashboard() {
     return data.pitch;
   }
 
+  async function fetchFollowUpWithRetry(
+    record: LeadRecord,
+    talkingPoints: string,
+    step: 2 | 3
+  ): Promise<GeneratedPitch> {
+    let lastError: unknown = null;
+
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        return await fetchPitch(record, talkingPoints, step);
+      } catch (error) {
+        lastError = error;
+        if (attempt < 2) {
+          await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+        }
+      }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error("Follow-up draft generation failed.");
+  }
+
   async function generateFollowUps(record: LeadRecord, talkingPoints: string) {
     try {
-      const [fu1, fu2] = await Promise.all([
-        fetchPitch(record, talkingPoints, 2),
-        fetchPitch(record, talkingPoints, 3)
-      ]);
+      const fu1 = await fetchFollowUpWithRetry(record, talkingPoints, 2);
+      const fu2 = await fetchFollowUpWithRetry(record, talkingPoints, 3);
 
       const next = {
         followUp1: { subject: fu1.subject, body: fu1.body },
@@ -975,6 +994,10 @@ export function OutreachDashboard() {
           followUp2 = generated?.followUp2;
         }
 
+        if (!followUp1 || !followUp2) {
+          throw new Error("We couldn't generate the full 3-email sequence yet, so nothing was saved. Try Queue Sequence again.");
+        }
+
         const sequence = [
           {
             locationId: location.id,
@@ -1037,7 +1060,7 @@ export function OutreachDashboard() {
         await Promise.all([loadEmails(), loadDashboard(), openLocation(location.id)]);
         setSelectedEmailId(data.emails[0]?.id ?? null);
         setActivePage("emails");
-        setPageSuccess(`3-step outreach sequence queued for ${draftRecord.lead.name}.`);
+        setPageSuccess(`${data.emails.length}-step outreach sequence queued for ${draftRecord.lead.name}.`);
       } catch (error) {
         setPageError(error instanceof Error ? error.message : "Failed to queue sequence.");
       }
