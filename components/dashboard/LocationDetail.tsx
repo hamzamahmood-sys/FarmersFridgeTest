@@ -329,7 +329,13 @@ export function LocationDetail({
     });
   }
 
-  async function ensureLeadEmail(record: LeadRecord): Promise<LeadRecord | null> {
+  async function ensureLeadEmail(
+    record: LeadRecord,
+    options?: {
+      suppressNotFoundMessage?: boolean;
+      suppressLookupErrorMessage?: boolean;
+    }
+  ): Promise<LeadRecord | null> {
     const resolvedRecord = getResolvedRecord(record);
 
     if (getResolvedEmailValue(resolvedRecord)) {
@@ -359,11 +365,13 @@ export function LocationDetail({
         const note = data.providerNotes?.[0];
         const status = data.emailStatus ? ` Apollo marked the email status as ${data.emailStatus}.` : "";
         setEmailLookupStateByLeadId((current) => ({ ...current, [record.lead.id]: "not_found" }));
-        setPageError(
-          note
-            ? `No email found for ${record.lead.name} yet. ${note}${status}`
-            : `No email found for ${record.lead.name} yet.${status}`
-        );
+        if (!options?.suppressNotFoundMessage) {
+          setPageError(
+            note
+              ? `No email found for ${record.lead.name} yet. ${note}${status}`
+              : `No email found for ${record.lead.name} yet.${status}`
+          );
+        }
         return data.leadRecord;
       }
 
@@ -372,7 +380,9 @@ export function LocationDetail({
       return data.leadRecord;
     } catch (error) {
       setEmailLookupStateByLeadId((current) => ({ ...current, [record.lead.id]: "not_found" }));
-      setPageError(error instanceof Error ? error.message : "Email lookup failed.");
+      if (!options?.suppressLookupErrorMessage) {
+        setPageError(error instanceof Error ? error.message : "Email lookup failed.");
+      }
       return null;
     } finally {
       setEmailLookupLeadId(null);
@@ -487,7 +497,17 @@ export function LocationDetail({
 
     startPitchTransition(async () => {
       try {
-        const resolvedRecord = getResolvedRecord(record);
+        let resolvedRecord = getResolvedRecord(record);
+        if (!getResolvedEmailValue(resolvedRecord)) {
+          const enrichedRecord = await ensureLeadEmail(resolvedRecord, {
+            suppressNotFoundMessage: true,
+            suppressLookupErrorMessage: true
+          });
+          if (enrichedRecord) {
+            resolvedRecord = enrichedRecord;
+          }
+        }
+
         const existingResearch = researchByLeadId[resolvedRecord.lead.id];
         const forceRefresh = Boolean(existingResearch && isLowSignalPitch(existingResearch.pitch));
         const pitch = await fetchPitch(resolvedRecord, talkingPointsOverride, 1, forceRefresh);
@@ -991,7 +1011,7 @@ export function LocationDetail({
                         type="button"
                         onClick={() => researchLead(record, research?.talkingPoints)}
                         disabled={pitchPending}
-                        title={research ? "Refresh research" : "Research contact"}
+                        title={research ? "Refresh research and retry email lookup" : "Research contact and find email"}
                       >
                         <Sparkles size={16} />
                       </button>
@@ -1106,7 +1126,7 @@ export function LocationDetail({
                                 onClick={() => researchLead(record, research.talkingPoints)}
                               >
                                 <RefreshCw size={16} />
-                                Regenerate
+                                Regenerate + Retry Email
                               </button>
                               <button
                                 className="primaryButton"
@@ -1152,7 +1172,7 @@ export function LocationDetail({
                                 disabled={pitchPending}
                               >
                                 <Sparkles size={16} />
-                                {pitchPending ? "Researching..." : "Research Contact"}
+                                {pitchPending ? "Researching..." : "Research + Find Email"}
                               </button>
                               <button
                                 className="primaryButton"
