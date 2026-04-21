@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { z, ZodError } from "zod";
 import { listSavedLocations, saveProspectCompanyAsLocation } from "@/lib/db";
+import { resolveCurrentUserId } from "@/lib/auth-user";
 
 const locationTypeSchema = z.enum(["hospital", "corporate", "university", "gym", "airport", "other", "all"]);
 const pipelineStageSchema = z.enum(["prospect", "meeting", "won", "lost", "all"]);
@@ -49,7 +50,9 @@ export async function GET(request: Request) {
         limit
       });
 
+    const userId = await resolveCurrentUserId();
     const locations = await listSavedLocations({
+      userId,
       query: parsed.query,
       locationType: parsed.locationType,
       pipelineStage: parsed.pipelineStage,
@@ -71,9 +74,10 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    const userId = await resolveCurrentUserId();
     const body = await request.json();
     const company = companySchema.parse(body.company ?? body);
-    const location = await saveProspectCompanyAsLocation(company);
+    const location = await saveProspectCompanyAsLocation(userId, company);
     return NextResponse.json({ location });
   } catch (error) {
     if (error instanceof ZodError) {

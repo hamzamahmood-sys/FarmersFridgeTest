@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { z, ZodError } from "zod";
 import { deleteSavedLocation, getLocationDetail, updateSavedLocation } from "@/lib/db";
+import { resolveCurrentUserId } from "@/lib/auth-user";
 
 const updateSchema = z.object({
   about: z.string().optional(),
@@ -18,7 +19,8 @@ export async function GET(
   context: { params: { id: string } }
 ) {
   try {
-    const detail = await getLocationDetail(context.params.id);
+    const userId = await resolveCurrentUserId();
+    const detail = await getLocationDetail(userId, context.params.id);
 
     if (!detail) {
       return NextResponse.json({ error: "Location not found." }, { status: 404 });
@@ -38,9 +40,10 @@ export async function PATCH(
   context: { params: { id: string } }
 ) {
   try {
+    const userId = await resolveCurrentUserId();
     const body = await request.json();
     const updates = updateSchema.parse(body);
-    const location = await updateSavedLocation(context.params.id, updates);
+    const location = await updateSavedLocation(userId, context.params.id, updates);
 
     if (!location) {
       return NextResponse.json({ error: "Location not found." }, { status: 404 });
@@ -64,7 +67,8 @@ export async function DELETE(
   context: { params: { id: string } }
 ) {
   try {
-    await deleteSavedLocation(context.params.id);
+    const userId = await resolveCurrentUserId();
+    await deleteSavedLocation(userId, context.params.id);
     return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json(

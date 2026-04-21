@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  getNormalizedDomainQuery,
   looksLikeExactCompanyQuery,
   parseSearchQuery,
   getDistinctiveCompanyTokens
@@ -25,6 +26,11 @@ describe("looksLikeExactCompanyQuery", () => {
   it("rejects single-token or overly generic queries", () => {
     expect(looksLikeExactCompanyQuery("Hospital")).toBe(false);
     expect(looksLikeExactCompanyQuery("")).toBe(false);
+  });
+
+  it("treats domains as exact company intent", () => {
+    expect(looksLikeExactCompanyQuery("google.com")).toBe(true);
+    expect(looksLikeExactCompanyQuery("https://www.google.com/maps")).toBe(true);
   });
 });
 
@@ -69,6 +75,25 @@ describe("parseSearchQuery", () => {
     expect(parsed.organizationIndustries).toEqual(
       expect.arrayContaining(["Hospital & Health Care"])
     );
+  });
+
+  it("captures normalized domains for exact domain searches", () => {
+    const parsed = parseSearchQuery("https://www.google.com/maps", []);
+    expect(parsed.looksLikeCompanyName).toBe(true);
+    expect(parsed.domainQuery).toBe("google.com");
+    expect(parsed.organizationIndustries).toEqual([]);
+  });
+});
+
+describe("getNormalizedDomainQuery", () => {
+  it("normalizes plain domains and urls", () => {
+    expect(getNormalizedDomainQuery("google.com")).toBe("google.com");
+    expect(getNormalizedDomainQuery("https://www.google.com/maps")).toBe("google.com");
+  });
+
+  it("ignores non-domain queries", () => {
+    expect(getNormalizedDomainQuery("google")).toBeNull();
+    expect(getNormalizedDomainQuery("law firm NYC")).toBeNull();
   });
 });
 

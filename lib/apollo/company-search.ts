@@ -2,6 +2,7 @@ import { personaToApolloTitles, scoreCompanyFit, sortLeadRecords } from "@/lib/u
 import type { LeadRecord, ProspectCompany, SearchFilters } from "@/lib/types";
 import { apolloFetch } from "./client";
 import {
+  getCompactCompanyNameVariant,
   getCompanyKeywordFallback,
   getDistinctiveCompanyTokens,
   parseSearchQuery,
@@ -52,6 +53,16 @@ type ApolloPeopleSearchResponse = {
   contacts?: Array<Record<string, unknown>>;
 };
 
+const COMMON_SECOND_LEVEL_DOMAIN_SUFFIXES = new Set([
+  "ac",
+  "co",
+  "com",
+  "edu",
+  "gov",
+  "net",
+  "org"
+]);
+
 function getOrganizationResults(
   response: ApolloOrganizationSearchResponse
 ): Array<Record<string, unknown>> {
@@ -83,6 +94,40 @@ function filterCompaniesForIntent(
   query: ReturnType<typeof parseSearchQuery>,
   companyTokens: string[]
 ): ProspectCompany[] {
+  if (query.domainQuery) {
+    const domainLabel = getDomainCompanyLabel(query.domainQuery);
+
+    return companies
+      .map((company) => {
+        const normalizedCompanyDomain = normalizeDomain(company.domain);
+        let matchScore = 0;
+
+        if (normalizedCompanyDomain === query.domainQuery) {
+          matchScore = 4;
+        } else if (normalizedCompanyDomain?.endsWith(`.${query.domainQuery}`)) {
+          matchScore = 3;
+        } else if (companyTokens.length > 0 && matchesCompanyTokens(company.name, companyTokens)) {
+          matchScore = 2;
+        } else if (
+          domainLabel &&
+          normalizedCompanyDomain &&
+          getDomainCompanyLabel(normalizedCompanyDomain) === domainLabel
+        ) {
+          matchScore = 1;
+        }
+
+        return { company, matchScore };
+      })
+      .filter((entry) => entry.matchScore > 0)
+      .sort(
+        (a, b) =>
+          b.matchScore - a.matchScore ||
+          b.company.priorityScore - a.company.priorityScore ||
+          a.company.name.localeCompare(b.company.name)
+      )
+      .map((entry) => entry.company);
+  }
+
   const exactFiltered = filterRelevantCompanies(companies, companyTokens);
   if (query.looksLikeCompanyName) return exactFiltered;
 
@@ -128,6 +173,32 @@ function sortCompanies(companies: ProspectCompany[]): ProspectCompany[] {
   return [...companies].sort(
     (a, b) => b.priorityScore - a.priorityScore || a.name.localeCompare(b.name)
   );
+}
+
+function getDomainCompanyLabel(domain: string): string {
+  const labels = domain
+    .toLowerCase()
+    .split(".")
+    .map((label) => label.trim())
+    .filter(Boolean);
+
+  if (labels.length === 0) return "";
+  if (labels.length === 1) return labels[0] || "";
+
+  const lastLabel = labels[labels.length - 1];
+  const secondLastLabel = labels[labels.length - 2];
+
+  if (
+    labels.length >= 3 &&
+    lastLabel &&
+    lastLabel.length === 2 &&
+    secondLastLabel &&
+    COMMON_SECOND_LEVEL_DOMAIN_SUFFIXES.has(secondLastLabel)
+  ) {
+    return labels[labels.length - 3] || "";
+  }
+
+  return secondLastLabel || labels[0] || "";
 }
 
 function scoreTitleMatch(title: string | undefined, selectedTitles: string[]): number {
@@ -197,10 +268,20 @@ function toProspectCompany(
 export async function searchCompanies(filters: SearchFilters): Promise<ProspectCompany[]> {
   const parsed = parseSearchQuery(filters.industryQuery, filters.states ?? []);
   const employeeRange = [`${filters.employeeMin},100000`];
+  const domainCompanyLabel = parsed.domainQuery
+    ? getDomainCompanyLabel(parsed.domainQuery)
+    : "";
   const companyTokens = parsed.looksLikeCompanyName
-    ? getDistinctiveCompanyTokens(parsed.rawQuery)
+    ? parsed.domainQuery
+      ? [domainCompanyLabel].filter(Boolean)
+      : getDistinctiveCompanyTokens(parsed.rawQuery)
     : [];
+  const compactCompanyNameVariant = parsed.looksLikeCompanyName
+    && !parsed.domainQuery
+    ? getCompactCompanyNameVariant(parsed.rawQuery)
+    : null;
   const companyKeywordFallback = parsed.looksLikeCompanyName
+    && !parsed.domainQuery
     ? getCompanyKeywordFallback(parsed.rawQuery)
     : null;
   const companyKeywordTags = [...new Set([parsed.descriptivePhrase, ...parsed.keywords].filter(Boolean))];
@@ -213,10 +294,31 @@ export async function searchCompanies(filters: SearchFilters): Promise<ProspectC
   const attempts: Array<{ label: string; params: Record<string, unknown> }> = [];
 
   if (parsed.looksLikeCompanyName) {
-    attempts.push({
-      label: "company-name",
-      params: { ...baseParams, q_organization_name: parsed.rawQuery }
-    });
+    if (parsed.domainQuery) {
+      attempts.push({
+        label: "company-domain",
+        params: { ...baseParams, q_organization_name: parsed.domainQuery }
+      });
+
+      if (domainCompanyLabel) {
+        attempts.push({
+          label: "company-domain-label",
+          params: { ...baseParams, q_organization_name: domainCompanyLabel }
+        });
+      }
+    } else {
+      attempts.push({
+        label: "company-name",
+        params: { ...baseParams, q_organization_name: parsed.rawQuery }
+      });
+    }
+
+    if (compactCompanyNameVariant) {
+      attempts.push({
+        label: "company-name-compact",
+        params: { ...baseParams, q_organization_name: compactCompanyNameVariant }
+      });
+    }
 
     if (companyKeywordFallback) {
       attempts.push({

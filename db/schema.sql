@@ -91,6 +91,7 @@ CREATE INDEX IF NOT EXISTS pitches_created_at_idx ON pitches (created_at DESC);
 
 CREATE TABLE IF NOT EXISTS saved_locations (
   id                TEXT        PRIMARY KEY,
+  user_id           INTEGER     NOT NULL DEFAULT 1,
   organization_id   TEXT,
   company_name      TEXT        NOT NULL,
   company_domain    TEXT,
@@ -110,6 +111,10 @@ CREATE TABLE IF NOT EXISTS saved_locations (
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Backfill for installs created before user_id existed.
+ALTER TABLE saved_locations ADD COLUMN IF NOT EXISTS user_id INTEGER NOT NULL DEFAULT 1;
+
+CREATE INDEX IF NOT EXISTS saved_locations_user_idx     ON saved_locations (user_id);
 CREATE INDEX IF NOT EXISTS saved_locations_pipeline_idx ON saved_locations (pipeline_stage);
 CREATE INDEX IF NOT EXISTS saved_locations_type_idx     ON saved_locations (location_type);
 CREATE INDEX IF NOT EXISTS saved_locations_updated_idx  ON saved_locations (updated_at DESC);
@@ -123,6 +128,7 @@ CREATE INDEX IF NOT EXISTS leads_location_id_idx ON leads (location_id);
 
 CREATE TABLE IF NOT EXISTS emails (
   id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id           INTEGER     NOT NULL DEFAULT 1,
   location_id       TEXT        REFERENCES saved_locations(id) ON DELETE CASCADE,
   lead_id           TEXT        REFERENCES leads(id) ON DELETE SET NULL,
   contact_name      TEXT,
@@ -139,6 +145,10 @@ CREATE TABLE IF NOT EXISTS emails (
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Backfill for installs created before user_id existed.
+ALTER TABLE emails ADD COLUMN IF NOT EXISTS user_id INTEGER NOT NULL DEFAULT 1;
+
+CREATE INDEX IF NOT EXISTS emails_user_idx        ON emails (user_id);
 CREATE INDEX IF NOT EXISTS emails_location_id_idx ON emails (location_id);
 CREATE INDEX IF NOT EXISTS emails_status_idx      ON emails (status);
 CREATE INDEX IF NOT EXISTS emails_created_at_idx  ON emails (created_at DESC);

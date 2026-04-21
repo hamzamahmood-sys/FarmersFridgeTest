@@ -23,6 +23,7 @@ declare global {
 }
 
 type SavedLocationFilters = {
+  userId: number;
   query?: string;
   locationType?: LocationType | "all";
   pipelineStage?: PipelineStage | "all";
@@ -30,6 +31,7 @@ type SavedLocationFilters = {
 };
 
 type EmailFilters = {
+  userId: number;
   query?: string;
   status?: EmailStatus | "all";
   locationId?: string;
@@ -405,9 +407,13 @@ export async function getCachedPitch(leadId: string, maxAgeHours?: number): Prom
 
 // ─── Saved locations ──────────────────────────────────────────────────────────
 
-export async function upsertSavedLocation(input: SavedLocationInput): Promise<SavedLocation> {
+export async function upsertSavedLocation(
+  userId: number,
+  input: SavedLocationInput
+): Promise<SavedLocation> {
   const params = [
     input.id,
+    userId,
     input.organizationId || null,
     input.companyName,
     input.companyDomain || null,
@@ -427,11 +433,11 @@ export async function upsertSavedLocation(input: SavedLocationInput): Promise<Sa
 
   const { rows } = await getPool().query(
     `INSERT INTO saved_locations (
-      id, organization_id, company_name, company_domain, industry, employee_count,
+      id, user_id, organization_id, company_name, company_domain, industry, employee_count,
       hq_city, hq_state, hq_country, about, category, location_type, pipeline_stage,
       pitch_type, notes, delivery_zone
     ) VALUES (
-      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17
     )
     ON CONFLICT (id) DO UPDATE SET
       organization_id = EXCLUDED.organization_id,
@@ -450,15 +456,23 @@ export async function upsertSavedLocation(input: SavedLocationInput): Promise<Sa
       notes = COALESCE(saved_locations.notes, EXCLUDED.notes),
       delivery_zone = EXCLUDED.delivery_zone,
       updated_at = NOW()
+    WHERE saved_locations.user_id = EXCLUDED.user_id
     RETURNING *`,
     params
   );
 
+  if (rows.length === 0) {
+    throw new Error("Location is owned by another user.");
+  }
+
   return rowToSavedLocation(rows[0] as Record<string, unknown>);
 }
 
-export async function saveProspectCompanyAsLocation(company: ProspectCompany): Promise<SavedLocation> {
-  return upsertSavedLocation({
+export async function saveProspectCompanyAsLocation(
+  userId: number,
+  company: ProspectCompany
+): Promise<SavedLocation> {
+  return upsertSavedLocation(userId, {
     id: company.id,
     organizationId: company.id,
     companyName: company.name,
@@ -483,9 +497,9 @@ export async function saveProspectCompanyAsLocation(company: ProspectCompany): P
   });
 }
 
-export async function listSavedLocations(filters: SavedLocationFilters = {}): Promise<SavedLocationSummary[]> {
-  const params: unknown[] = [];
-  const conditions: string[] = [];
+export async function listSavedLocations(filters: SavedLocationFilters): Promise<SavedLocationSummary[]> {
+  const params: unknown[] = [filters.userId];
+  const conditions: string[] = [`sl.user_id = $${params.length}`];
 
   if (filters.query?.trim()) {
     params.push(`%${filters.query.trim()}%`);
@@ -524,7 +538,7 @@ export async function listSavedLocations(filters: SavedLocationFilters = {}): Pr
       WHERE location_id IS NOT NULL
       GROUP BY location_id
     ) ec ON ec.location_id = sl.id
-    ${conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""}
+    WHERE ${conditions.join(" AND ")}
     ORDER BY sl.updated_at DESC
     LIMIT $${params.length}
   `;
@@ -538,9 +552,12 @@ export async function listSavedLocations(filters: SavedLocationFilters = {}): Pr
   }
 }
 
-export async function getSavedLocationById(id: string): Promise<SavedLocation | null> {
+export async function getSavedLocationById(userId: number, id: string): Promise<SavedLocation | null> {
   try {
-    const { rows } = await getPool().query("SELECT * FROM saved_locations WHERE id = $1 LIMIT 1", [id]);
+    const { rows } = await getPool().query(
+      "SELECT * FROM saved_locations WHERE id = $1 AND user_id = $2 LIMIT 1",
+      [id, userId]
+    );
     if (rows.length === 0) return null;
     return rowToSavedLocation(rows[0] as Record<string, unknown>);
   } catch (error) {
@@ -549,15 +566,19 @@ export async function getSavedLocationById(id: string): Promise<SavedLocation | 
   }
 }
 
-export async function getLocationDetail(id: string): Promise<LocationDetail | null> {
-  const location = await getSavedLocationById(id);
+export async function getLocationDetail(userId: number, id: string): Promise<LocationDetail | null> {
+  const location = await getSavedLocationById(userId, id);
   if (!location) return null;
 
-  const [contacts, emails] = await Promise.all([getLocationContacts(id), getLocationEmails(id)]);
+  const [contacts, emails] = await Promise.all([
+    getLocationContacts(id),
+    getLocationEmails(userId, id)
+  ]);
   return { location, contacts, emails };
 }
 
 export async function updateSavedLocation(
+  userId: number,
   id: string,
   updates: Partial<
     Pick<SavedLocation, "about" | "category" | "notes" | "locationType" | "pipelineStage" | "pitchType">
@@ -592,15 +613,18 @@ export async function updateSavedLocation(
   }
 
   if (sets.length === 0) {
-    return getSavedLocationById(id);
+    return getSavedLocationById(userId, id);
   }
 
   sets.push("updated_at = NOW()");
   params.push(id);
+  const idParamIdx = params.length;
+  params.push(userId);
+  const userParamIdx = params.length;
 
   try {
     const { rows } = await getPool().query(
-      `UPDATE saved_locations SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`,
+      `UPDATE saved_locations SET ${sets.join(", ")} WHERE id = $${idParamIdx} AND user_id = $${userParamIdx} RETURNING *`,
       params
     );
     if (rows.length === 0) return null;
@@ -611,15 +635,18 @@ export async function updateSavedLocation(
   }
 }
 
-export async function deleteSavedLocation(id: string): Promise<void> {
+export async function deleteSavedLocation(userId: number, id: string): Promise<void> {
   try {
-    await getPool().query("DELETE FROM saved_locations WHERE id = $1", [id]);
+    await getPool().query(
+      "DELETE FROM saved_locations WHERE id = $1 AND user_id = $2",
+      [id, userId]
+    );
   } catch (error) {
     console.error("[db] deleteSavedLocation error:", error instanceof Error ? error.message : error);
   }
 }
 
-export async function getDashboardStats(): Promise<DashboardStats> {
+export async function getDashboardStats(userId: number): Promise<DashboardStats> {
   const stats: DashboardStats = {
     locationsCount: 0,
     draftsCount: 0,
@@ -649,19 +676,25 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       }>(
         `SELECT
           COUNT(*)::text AS locations_count,
-          (SELECT COUNT(*)::text FROM emails) AS drafts_count,
+          (SELECT COUNT(*)::text FROM emails WHERE user_id = $1) AS drafts_count,
           COUNT(*) FILTER (WHERE pipeline_stage = 'won')::text AS won_count
-         FROM saved_locations`
+         FROM saved_locations
+         WHERE user_id = $1`,
+        [userId]
       ),
       getPool().query<{ pipeline_stage: PipelineStage; count: string }>(
         `SELECT pipeline_stage, COUNT(*)::text AS count
          FROM saved_locations
-         GROUP BY pipeline_stage`
+         WHERE user_id = $1
+         GROUP BY pipeline_stage`,
+        [userId]
       ),
       getPool().query<{ location_type: LocationType; count: string }>(
         `SELECT location_type, COUNT(*)::text AS count
          FROM saved_locations
-         GROUP BY location_type`
+         WHERE user_id = $1
+         GROUP BY location_type`,
+        [userId]
       )
     ]);
 
@@ -689,11 +722,11 @@ export async function getDashboardStats(): Promise<DashboardStats> {
 
 // ─── Emails ───────────────────────────────────────────────────────────────────
 
-export async function getLocationEmails(locationId: string): Promise<StoredEmail[]> {
+export async function getLocationEmails(userId: number, locationId: string): Promise<StoredEmail[]> {
   try {
     const { rows } = await getPool().query(
-      "SELECT * FROM emails WHERE location_id = $1 ORDER BY updated_at DESC, sequence_step ASC",
-      [locationId]
+      "SELECT * FROM emails WHERE location_id = $1 AND user_id = $2 ORDER BY updated_at DESC, sequence_step ASC",
+      [locationId, userId]
     );
     return rows.map((row) => rowToStoredEmail(row as Record<string, unknown>));
   } catch (error) {
@@ -702,9 +735,9 @@ export async function getLocationEmails(locationId: string): Promise<StoredEmail
   }
 }
 
-export async function listEmails(filters: EmailFilters = {}): Promise<StoredEmail[]> {
-  const params: unknown[] = [];
-  const conditions: string[] = [];
+export async function listEmails(filters: EmailFilters): Promise<StoredEmail[]> {
+  const params: unknown[] = [filters.userId];
+  const conditions: string[] = [`user_id = $${params.length}`];
 
   if (filters.query?.trim()) {
     params.push(`%${filters.query.trim()}%`);
@@ -731,7 +764,7 @@ export async function listEmails(filters: EmailFilters = {}): Promise<StoredEmai
   const sql = `
     SELECT *
     FROM emails
-    ${conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""}
+    WHERE ${conditions.join(" AND ")}
     ORDER BY updated_at DESC, sequence_step ASC
     LIMIT $${params.length}
   `;
@@ -746,24 +779,26 @@ export async function listEmails(filters: EmailFilters = {}): Promise<StoredEmai
 }
 
 export async function replaceEmailsForLead(
+  userId: number,
   leadId: string,
   emails: StoredEmailInput[]
 ): Promise<StoredEmail[]> {
   try {
     return await withTransaction(async (client) => {
-      await client.query("DELETE FROM emails WHERE lead_id = $1", [leadId]);
+      await client.query("DELETE FROM emails WHERE lead_id = $1 AND user_id = $2", [leadId, userId]);
 
       const created: StoredEmail[] = [];
       for (const email of emails) {
         const { rows } = await client.query(
           `INSERT INTO emails (
-            location_id, lead_id, contact_name, contact_email, contact_title, company_name,
+            user_id, location_id, lead_id, contact_name, contact_email, contact_title, company_name,
             location_type, sequence_step, subject, body, status, gmail_draft_url
           ) VALUES (
-            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13
           )
           RETURNING *`,
           [
+            userId,
             email.locationId || null,
             leadId,
             email.contactName || null,
@@ -791,6 +826,7 @@ export async function replaceEmailsForLead(
 }
 
 export async function updateEmail(
+  userId: number,
   id: string,
   updates: Partial<Pick<StoredEmail, "subject" | "body" | "status" | "gmailDraftUrl">>
 ): Promise<StoredEmail | null> {
@@ -820,10 +856,13 @@ export async function updateEmail(
 
   sets.push("updated_at = NOW()");
   params.push(id);
+  const idParamIdx = params.length;
+  params.push(userId);
+  const userParamIdx = params.length;
 
   try {
     const { rows } = await getPool().query(
-      `UPDATE emails SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`,
+      `UPDATE emails SET ${sets.join(", ")} WHERE id = $${idParamIdx} AND user_id = $${userParamIdx} RETURNING *`,
       params
     );
     if (rows.length === 0) return null;

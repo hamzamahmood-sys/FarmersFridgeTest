@@ -186,14 +186,35 @@ export interface ParsedQuery {
   keywordPhrase: string;
   descriptivePhrase: string;
   rawQuery: string;
+  domainQuery: string | null;
   looksLikeCompanyName: boolean;
   industryHints: string[];
   organizationIndustries: string[];
 }
 
+export function getNormalizedDomainQuery(query: string): string | null {
+  const cleaned = query.trim();
+  if (!cleaned) return null;
+
+  try {
+    const candidate = cleaned.includes("://") ? cleaned : `https://${cleaned}`;
+    const hostname = new URL(candidate).hostname.replace(/^www\./i, "").toLowerCase();
+
+    if (!hostname || !hostname.includes(".")) {
+      return null;
+    }
+
+    return hostname;
+  } catch {
+    return null;
+  }
+}
+
 export function looksLikeExactCompanyQuery(query: string): boolean {
   const cleaned = query.trim();
   if (!cleaned) return false;
+
+  if (getNormalizedDomainQuery(cleaned)) return true;
 
   // "University of Chicago", "Bank of America", etc. — treat as a company name
   // even though the query contains a location word.
@@ -218,6 +239,7 @@ export function looksLikeExactCompanyQuery(query: string): boolean {
 
 export function parseSearchQuery(query: string, stateHints: string[]): ParsedQuery {
   const cleaned = query.trim();
+  const domainQuery = getNormalizedDomainQuery(cleaned);
   let remaining = cleaned;
   const locationsFromQuery = new Set<string>();
   const locationsFromHint = new Set<string>();
@@ -259,6 +281,7 @@ export function parseSearchQuery(query: string, stateHints: string[]): ParsedQue
   // require that no location was stripped from the query itself (region hint
   // doesn't count).
   const looksLikeCompanyName =
+    Boolean(domainQuery) ||
     isCompanyOfLocation ||
     (locationsFromQuery.size === 0 && looksLikeExactCompanyQuery(cleaned));
 
@@ -271,6 +294,7 @@ export function parseSearchQuery(query: string, stateHints: string[]): ParsedQue
     keywordPhrase: keywords.join(" "),
     descriptivePhrase: descriptiveTokens.join(" "),
     rawQuery: cleaned,
+    domainQuery,
     looksLikeCompanyName,
     industryHints,
     organizationIndustries
@@ -304,6 +328,20 @@ export function getCompanyKeywordFallback(query: string): string | null {
   }
 
   return fallback;
+}
+
+export function getCompactCompanyNameVariant(query: string): string | null {
+  const cleaned = query.trim();
+  if (!cleaned) return null;
+
+  const compact = tokenizeSearchText(cleaned).join("");
+  if (!compact) return null;
+
+  if (compact === cleaned.toLowerCase()) {
+    return null;
+  }
+
+  return compact;
 }
 
 export function tokenizeCompanyName(value: string): string {

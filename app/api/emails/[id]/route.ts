@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { z, ZodError } from "zod";
 import { updateEmail } from "@/lib/db";
+import { resolveCurrentUserId } from "@/lib/auth-user";
 
 const updateSchema = z.object({
   subject: z.string().min(1).optional(),
@@ -16,9 +17,10 @@ export async function PATCH(
   context: { params: { id: string } }
 ) {
   try {
+    const userId = await resolveCurrentUserId();
     const body = await request.json();
     const updates = updateSchema.parse(body);
-    const email = await updateEmail(context.params.id, updates);
+    const email = await updateEmail(userId, context.params.id, updates);
 
     if (!email) {
       return NextResponse.json({ error: "Email not found." }, { status: 404 });

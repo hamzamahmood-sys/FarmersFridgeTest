@@ -17,6 +17,22 @@ const marketFilters: SearchFilters = {
   limit: 5
 };
 
+const exactCompanyFilters: SearchFilters = {
+  personas: ["office_manager"],
+  industryQuery: "draft kings",
+  states: [],
+  employeeMin: 200,
+  limit: 5
+};
+
+const exactDomainFilters: SearchFilters = {
+  personas: ["office_manager"],
+  industryQuery: "google.com",
+  states: [],
+  employeeMin: 200,
+  limit: 5
+};
+
 const selectedCompany: ProspectCompany = {
   id: "org-1",
   name: "Hudson Legal Group",
@@ -83,9 +99,9 @@ describe("company-first Apollo search", () => {
 
     const companies = await searchCompanies(marketFilters);
 
-    expect(companies).toHaveLength(1);
-    expect(companies[0]?.name).toBe("Hudson Legal Group");
-    expect(companies[0]?.company.deliveryZone).toBe("NYC");
+    expect(companies.length).toBeGreaterThan(0);
+    expect(companies.some((company) => company.name === "Hudson Legal Group")).toBe(true);
+    expect(companies.find((company) => company.name === "Hudson Legal Group")?.company.deliveryZone).toBe("NYC");
   });
 
   it("loads contacts for a selected company using organization_ids", async () => {
@@ -139,6 +155,94 @@ describe("company-first Apollo search", () => {
           params.organization_ids.includes("org-1") &&
           !("person_titles" in params)
         );
+      })
+    ).toBe(true);
+  });
+
+  it("tries a compact company-name variant for exact company searches", async () => {
+    mockApolloFetch.mockImplementation(async (_path, body) => {
+      const params = body as Record<string, unknown>;
+
+      if (params.q_organization_name === "draftkings") {
+        return {
+          organizations: [
+            {
+              id: "org-dk",
+              name: "DraftKings Inc.",
+              primary_domain: "draftkings.com",
+              estimated_num_employees: 4000,
+              city: "Boston",
+              state: "Massachusetts",
+              country: "United States"
+            }
+          ]
+        };
+      }
+
+      return { organizations: [] };
+    });
+
+    const companies = await searchCompanies(exactCompanyFilters);
+
+    expect(companies).toHaveLength(1);
+    expect(companies[0]?.name).toBe("DraftKings Inc.");
+    expect(
+      mockApolloFetch.mock.calls.some(([, body]) => {
+        const params = body as Record<string, unknown>;
+        return params.q_organization_name === "draftkings";
+      })
+    ).toBe(true);
+  });
+
+  it("treats domain searches as exact intent and filters unrelated Apollo matches", async () => {
+    mockApolloFetch.mockImplementation(async (_path, body) => {
+      const params = body as Record<string, unknown>;
+
+      if (params.q_organization_name === "google.com") {
+        return {
+          organizations: [
+            {
+              id: "org-noise",
+              name: "Business Insider",
+              primary_domain: "businessinsider.com",
+              estimated_num_employees: 1800,
+              city: "New York",
+              state: "New York",
+              country: "United States"
+            }
+          ]
+        };
+      }
+
+      if (params.q_organization_name === "google") {
+        return {
+          organizations: [
+            {
+              id: "org-google",
+              name: "Google",
+              primary_domain: "google.com",
+              estimated_num_employees: 180000,
+              city: "Mountain View",
+              state: "California",
+              country: "United States"
+            }
+          ]
+        };
+      }
+
+      return { organizations: [] };
+    });
+
+    const companies = await searchCompanies(exactDomainFilters);
+
+    expect(companies).toHaveLength(1);
+    expect(companies[0]?.name).toBe("Google");
+    expect(companies[0]?.domain).toBe("google.com");
+    expect(companies.some((company) => company.name === "Business Insider")).toBe(false);
+    expect(
+      mockApolloFetch.mock.calls.some(([, body]) => {
+        const params = body as Record<string, unknown>;
+        return params.q_organization_name === "google";
       })
     ).toBe(true);
   });

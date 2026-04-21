@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { z, ZodError } from "zod";
 import { listEmails, replaceEmailsForLead } from "@/lib/db";
+import { resolveCurrentUserId } from "@/lib/auth-user";
 
 const emailStatusSchema = z.enum(["generated", "approved", "sent", "all"]);
 const locationTypeSchema = z.enum(["hospital", "corporate", "university", "gym", "airport", "other"]);
@@ -30,6 +31,7 @@ const createSequenceSchema = z.object({
 
 export async function GET(request: Request) {
   try {
+    const userId = await resolveCurrentUserId();
     const url = new URL(request.url);
     const query = url.searchParams.get("q") || undefined;
     const status = url.searchParams.get("status") || "all";
@@ -46,7 +48,7 @@ export async function GET(request: Request) {
       })
       .parse({ query, status, locationId, limit });
 
-    const emails = await listEmails(parsed);
+    const emails = await listEmails({ userId, ...parsed });
     return NextResponse.json({ emails });
   } catch (error) {
     if (error instanceof ZodError) {
@@ -62,9 +64,10 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    const userId = await resolveCurrentUserId();
     const body = await request.json();
     const payload = createSequenceSchema.parse(body);
-    const emails = await replaceEmailsForLead(payload.leadId, payload.emails);
+    const emails = await replaceEmailsForLead(userId, payload.leadId, payload.emails);
     return NextResponse.json({ emails });
   } catch (error) {
     if (error instanceof ZodError) {
