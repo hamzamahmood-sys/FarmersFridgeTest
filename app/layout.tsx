@@ -17,7 +17,10 @@ const inter = Inter({
 
 export const metadata: Metadata = {
   title: "Farmer's Fridge — Lead Gen Hub",
-  description: "Find leads, generate personalized pitches, and push Gmail drafts — all in one place."
+  description: "Find leads, generate personalized pitches, and push Gmail drafts — all in one place.",
+  icons: {
+    icon: "/icon.svg"
+  }
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
