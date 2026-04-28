@@ -22,10 +22,9 @@ export async function POST(request: Request) {
     }
 
     const leads = await discoverContactsWithAI(location);
+    const persistedLeads = await cacheLeads(userId, leads, `ai:${location.companyName}`, { locationId: location.id });
 
-    void cacheLeads(leads, `ai:${location.companyName}`, { locationId: location.id });
-
-    return NextResponse.json({ leads, foundCount: leads.length });
+    return NextResponse.json({ leads: persistedLeads, foundCount: persistedLeads.length });
   } catch (error) {
     if (error instanceof ZodError) {
       return NextResponse.json({ error: error.errors[0]?.message ?? "Invalid request." }, { status: 400 });

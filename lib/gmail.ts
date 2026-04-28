@@ -89,12 +89,27 @@ async function getAuthorizedGmailClient() {
   return google.gmail({ version: "v1", auth: oauth2Client });
 }
 
+function assertHeaderSafe(value: string, headerName: string): void {
+  if (/[\r\n]/.test(value)) {
+    throw new Error(`${headerName} cannot contain line breaks.`);
+  }
+}
+
+function encodeMimeHeader(value: string, headerName: string): string {
+  assertHeaderSafe(value, headerName);
+  return /[^\x20-\x7e]/.test(value)
+    ? `=?UTF-8?B?${Buffer.from(value, "utf8").toString("base64")}?=`
+    : value;
+}
+
 export async function createGmailDraft(payload: GmailDraftPayload) {
   const gmail = await getAuthorizedGmailClient();
+  assertHeaderSafe(payload.to, "To");
+  const subject = encodeMimeHeader(payload.subject, "Subject");
   const encodedMessage = Buffer.from(
     [
       `To: ${payload.to}`,
-      `Subject: ${payload.subject}`,
+      `Subject: ${subject}`,
       "MIME-Version: 1.0",
       "Content-Type: text/plain; charset=utf-8",
       "",

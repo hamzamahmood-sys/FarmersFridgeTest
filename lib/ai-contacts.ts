@@ -149,32 +149,37 @@ export async function discoverContactsWithAI(location: SavedLocation): Promise<L
 
   const anchorId = location.organizationId || location.id;
 
-  return contacts.map<LeadRecord>((contact) => ({
-    lead: {
-      id: slugifyId(anchorId, contact.name),
-      name: contact.name,
-      email: contact.email || "",
-      title: contact.title,
-      linkedinUrl: contact.linkedinUrl,
-      companyName: location.companyName,
-      companyDomain: location.companyDomain,
-      organizationId: location.organizationId,
-      department: contact.department,
-      locationId: location.id,
-      source: "ai",
-      emailSource: contact.email ? "ai" : undefined
-    },
-    company: {
-      industry: location.industry,
-      employeeCount: location.employeeCount,
-      hqCity: location.hqCity,
-      hqState: location.hqState,
-      hqCountry: location.hqCountry,
-      keywords: [],
-      techStack: [],
-      about: location.about,
-      deliveryZone: location.deliveryZone
-    },
-    priorityScore: 0
-  }));
+  return contacts.map<LeadRecord>((contact) => {
+    const contactId = slugifyId(anchorId, contact.name);
+
+    return {
+      lead: {
+        id: contactId,
+        externalId: contactId,
+        name: contact.name,
+        email: contact.email || "",
+        title: contact.title,
+        linkedinUrl: contact.linkedinUrl,
+        companyName: location.companyName,
+        companyDomain: location.companyDomain,
+        organizationId: location.organizationId,
+        department: contact.department,
+        locationId: location.id,
+        source: "ai",
+        emailSource: contact.email ? "ai" : undefined
+      },
+      company: {
+        industry: location.industry,
+        employeeCount: location.employeeCount,
+        hqCity: location.hqCity,
+        hqState: location.hqState,
+        hqCountry: location.hqCountry,
+        keywords: [],
+        techStack: [],
+        about: location.about,
+        deliveryZone: location.deliveryZone
+      },
+      priorityScore: 0
+    };
+  });
 }

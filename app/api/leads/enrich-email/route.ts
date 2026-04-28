@@ -4,9 +4,10 @@ import { NextResponse } from "next/server";
 import { z, ZodError } from "zod";
 import { enrichLeadContactFromApollo } from "@/lib/apollo";
 import { isRealApolloEmail } from "@/lib/apollo/normalize";
-import { updateLeadContact } from "@/lib/db";
+import { getLeadById, updateLeadContact } from "@/lib/db";
 import { resolveCompanyDomain } from "@/lib/tavily";
 import { findEmailTomba, isTombaConfigured } from "@/lib/tomba";
+import { AuthRequired, resolveCurrentUserId } from "@/lib/auth-user";
 
 const companySchema = z.object({
   industry: z.string().optional(),
@@ -22,6 +23,7 @@ const companySchema = z.object({
 
 const leadSchema = z.object({
   id: z.string(),
+  externalId: z.string().optional(),
   name: z.string(),
   email: z.string(),
   title: z.string(),
@@ -57,8 +59,14 @@ function splitFullName(name: string): { firstName: string; lastName: string } {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
+    const userId = await resolveCurrentUserId();
     const payload = payloadSchema.parse(body);
-    let leadRecord = payload.leadRecord;
+    const storedLeadRecord = await getLeadById(userId, payload.leadRecord.lead.id);
+    if (!storedLeadRecord) {
+      return NextResponse.json({ error: "Lead not found." }, { status: 404 });
+    }
+
+    let leadRecord = storedLeadRecord;
     let source: "existing" | "apollo" | "tomba" | "none" = isRealApolloEmail(leadRecord.lead.email)
       ? "existing"
       : "none";
@@ -177,13 +185,16 @@ export async function POST(request: Request) {
       };
     }
 
-    await updateLeadContact(leadRecord.lead.id, {
+    const updated = await updateLeadContact(userId, leadRecord.lead.id, {
       email: hasResolvedEmail ? leadRecord.lead.email : undefined,
       linkedinUrl: leadRecord.lead.linkedinUrl,
       companyDomain: leadRecord.lead.companyDomain,
       organizationId: leadRecord.lead.organizationId,
       emailSource: resolvedEmailSource
     });
+    if (!updated) {
+      return NextResponse.json({ error: "Lead not found." }, { status: 404 });
+    }
 
     return NextResponse.json({
       leadRecord,
@@ -194,6 +205,9 @@ export async function POST(request: Request) {
       providerNotes
     });
   } catch (error) {
+    if (error instanceof AuthRequired) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     if (error instanceof ZodError) {
       return NextResponse.json({ error: error.errors[0]?.message ?? "Invalid request." }, { status: 400 });
     }

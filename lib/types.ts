@@ -15,6 +15,7 @@ export type ContactSource = "apollo" | "ai";
 export type EmailSource = "apollo" | "tomba" | "ai" | "existing";
 
 export interface Lead {
+  externalId?: string;
   id: string;
   name: string;
   email: string;

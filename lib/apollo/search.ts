@@ -495,6 +495,7 @@ export async function searchLeads(filters: SearchFilters): Promise<LeadRecord[]>
       const record: LeadRecord = {
         lead: {
           id: typeof person.id === "string" ? person.id : `lead-${index}`,
+          externalId: typeof person.id === "string" ? person.id : undefined,
           name: getPersonName(person) || "Unknown Contact",
           email: apolloEmail,
           title: titleValue,

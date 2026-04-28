@@ -6,6 +6,7 @@ import { looksLikeExactCompanyQuery, searchLeads } from "@/lib/apollo";
 import { estimateApolloCredits } from "@/lib/utils";
 import { getCachedLeads, cacheLeads } from "@/lib/db";
 import { checkRateLimit, getRateLimitKey } from "@/lib/rate-limit";
+import { AuthRequired, resolveCurrentUserId } from "@/lib/auth-user";
 
 const searchSchema = z.object({
   personas: z
@@ -31,24 +32,26 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const filters = searchSchema.parse(body);
+    const userId = await resolveCurrentUserId();
     const creditEstimate = estimateApolloCredits(filters.limit);
     const bypassCache = looksLikeExactCompanyQuery(filters.industryQuery);
 
     // Return cached leads if fresh and not explicitly refreshing
     if (!filters.forceRefresh && !bypassCache) {
-      const cached = await getCachedLeads(filters.industryQuery);
+      const cached = await getCachedLeads(userId, filters.industryQuery);
       if (cached) {
         return NextResponse.json({ filters, creditEstimate, leads: cached, fromCache: true });
       }
     }
 
     const leads = await searchLeads(filters);
+    const persistedLeads = await cacheLeads(userId, leads, filters.industryQuery);
 
-    // Persist in background — don't block the response
-    void cacheLeads(leads, filters.industryQuery);
-
-    return NextResponse.json({ filters, creditEstimate, leads, fromCache: false });
+    return NextResponse.json({ filters, creditEstimate, leads: persistedLeads, fromCache: false });
   } catch (error) {
+    if (error instanceof AuthRequired) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     if (error instanceof ZodError) {
       return NextResponse.json({ error: error.errors[0]?.message ?? "Invalid request." }, { status: 400 });
     }

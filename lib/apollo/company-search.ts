@@ -535,6 +535,7 @@ export async function searchLeadsForCompany(
     const record: LeadRecord = {
       lead: {
         id: typeof person.id === "string" || typeof person.id === "number" ? String(person.id) : `lead-${index}`,
+        externalId: typeof person.id === "string" || typeof person.id === "number" ? String(person.id) : undefined,
         name: getPersonName(person) || "Unknown Contact",
         email: apolloEmail,
         title: titleValue,

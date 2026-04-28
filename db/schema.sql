@@ -1,6 +1,8 @@
 -- Farmer's Fridge Smart Outreach — schema
 -- Run with: node scripts/migrate.cjs
 
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- ─── NextAuth / Auth.js tables (@auth/pg-adapter) ─────────────────────────────
 -- Schema from https://authjs.dev/getting-started/adapters/pg
 
@@ -45,6 +47,8 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE TABLE IF NOT EXISTS leads (
   id                TEXT        PRIMARY KEY,
+  user_id           INTEGER     NOT NULL DEFAULT 1,
+  external_id       TEXT,
   name              TEXT        NOT NULL,
   email             TEXT,
   title             TEXT,
@@ -69,8 +73,15 @@ CREATE TABLE IF NOT EXISTS leads (
 CREATE INDEX IF NOT EXISTS leads_search_query_idx ON leads (search_query);
 CREATE INDEX IF NOT EXISTS leads_fetched_at_idx   ON leads (fetched_at DESC);
 
+-- Backfill for installs created before per-user lead ownership existed.
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS user_id     INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS external_id TEXT;
+UPDATE leads SET external_id = id WHERE external_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS leads_user_external_idx ON leads (user_id, external_id) WHERE external_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS pitches (
   id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id           INTEGER     NOT NULL DEFAULT 1,
   lead_id           TEXT        NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
   subject           TEXT,
   body              TEXT,
@@ -85,12 +96,15 @@ CREATE TABLE IF NOT EXISTS pitches (
 CREATE INDEX IF NOT EXISTS pitches_lead_id_idx    ON pitches (lead_id);
 CREATE INDEX IF NOT EXISTS pitches_created_at_idx ON pitches (created_at DESC);
 
+ALTER TABLE pitches ADD COLUMN IF NOT EXISTS user_id INTEGER NOT NULL DEFAULT 1;
+CREATE INDEX IF NOT EXISTS pitches_user_lead_idx ON pitches (user_id, lead_id);
+
 -- ─── Saved locations (pipeline) ───────────────────────────────────────────────
 -- Companies the user has added to their pipeline. Contacts live in `leads` and
 -- reference the location via organization_id.
 
 CREATE TABLE IF NOT EXISTS saved_locations (
-  id                TEXT        PRIMARY KEY,
+  id                TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
   user_id           INTEGER     NOT NULL DEFAULT 1,
   organization_id   TEXT,
   company_name      TEXT        NOT NULL,
@@ -113,11 +127,15 @@ CREATE TABLE IF NOT EXISTS saved_locations (
 
 -- Backfill for installs created before user_id existed.
 ALTER TABLE saved_locations ADD COLUMN IF NOT EXISTS user_id INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE saved_locations ALTER COLUMN id SET DEFAULT gen_random_uuid()::text;
 
 CREATE INDEX IF NOT EXISTS saved_locations_user_idx     ON saved_locations (user_id);
 CREATE INDEX IF NOT EXISTS saved_locations_pipeline_idx ON saved_locations (pipeline_stage);
 CREATE INDEX IF NOT EXISTS saved_locations_type_idx     ON saved_locations (location_type);
 CREATE INDEX IF NOT EXISTS saved_locations_updated_idx  ON saved_locations (updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS saved_locations_user_org_idx
+  ON saved_locations (user_id, organization_id)
+  WHERE organization_id IS NOT NULL;
 
 -- Add location_id on leads so contacts can be grouped under a saved location.
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS location_id TEXT REFERENCES saved_locations(id) ON DELETE SET NULL;
@@ -127,6 +145,7 @@ ALTER TABLE leads ADD COLUMN IF NOT EXISTS source        TEXT;
 -- Provenance: where the email address was sourced (apollo | tomba | ai | existing). Nullable.
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS email_source  TEXT;
 CREATE INDEX IF NOT EXISTS leads_location_id_idx ON leads (location_id);
+CREATE INDEX IF NOT EXISTS leads_user_location_idx ON leads (user_id, location_id);
 
 -- ─── Emails (persisted drafts / sent) ─────────────────────────────────────────
 

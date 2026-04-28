@@ -24,6 +24,7 @@ const companySchema = z.object({
 
 const leadSchema = z.object({
   id: z.string(),
+  externalId: z.string().optional(),
   name: z.string(),
   email: z.string(),
   title: z.string(),
@@ -93,7 +94,7 @@ export async function POST(request: Request) {
     // Return cached pitch unless the user explicitly regenerated (only for step 1).
     // Pitches older than PITCH_CACHE_TTL_HOURS are treated as stale and regenerated.
     if (!payload.forceRefresh && !talkingPointsOverride && payload.step === 1) {
-      const cached = await getCachedPitch(leadId, PITCH_CACHE_TTL_HOURS);
+      const cached = await getCachedPitch(userId, leadId, PITCH_CACHE_TTL_HOURS);
       if (cached && !isLowSignalPitch(cached)) {
         return NextResponse.json({ pitch: normalizePitchResponse(cached), fromCache: true });
       }
@@ -110,7 +111,7 @@ export async function POST(request: Request) {
     // Only cache the primary email draft. Follow-up drafts are generated on demand
     // and should not overwrite the main step-1 pitch for this lead.
     if (payload.step === 1) {
-      void cachePitch(leadId, pitch);
+      void cachePitch(userId, leadId, pitch);
     }
 
     return NextResponse.json({ pitch, fromCache: false });

@@ -6,7 +6,9 @@ import { createGmailDraft } from "@/lib/gmail";
 
 const draftSchema = z.object({
   to: z.string().email(),
-  subject: z.string().min(1),
+  subject: z.string().min(1).refine((value) => !/[\r\n]/.test(value), {
+    message: "Subject cannot contain line breaks."
+  }),
   body: z.string().min(1)
 });
 

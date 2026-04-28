@@ -20,11 +20,12 @@ export async function enrichLeadContactFromApollo(record: LeadRecord): Promise<L
   }
 
   let person: Record<string, unknown> | undefined;
+  const apolloPersonId = record.lead.externalId || record.lead.id;
 
   try {
-    if (record.lead.id && !record.lead.id.startsWith("lead-")) {
+    if (record.lead.source !== "ai" && apolloPersonId && !apolloPersonId.startsWith("lead-")) {
       const response = await apolloFetch<ApolloPersonMatchResponse>("/v1/people/match", {
-        id: record.lead.id,
+        id: apolloPersonId,
         reveal_personal_emails: true
       });
       person = response.person;
@@ -61,6 +62,10 @@ export async function enrichLeadContactFromApollo(record: LeadRecord): Promise<L
     ...record,
     lead: {
       ...record.lead,
+      externalId:
+        typeof person?.id === "string" || typeof person?.id === "number"
+          ? String(person.id)
+          : record.lead.externalId,
       name: getPersonName(person || {}) || record.lead.name,
       email: apolloEmail || existingEmail,
       linkedinUrl,

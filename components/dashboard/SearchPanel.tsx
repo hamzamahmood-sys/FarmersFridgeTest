@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useTransition } from "react";
+import { useState, useMemo } from "react";
 import { ArrowRight, Building2, Search, Trash2, Upload } from "lucide-react";
 import { CONTACT_SEARCH_INCREMENT, DEFAULT_SEARCH_FILTERS, PERSONA_LABELS } from "@/lib/constants";
 import type {
@@ -61,7 +61,7 @@ export function SearchPanel({
   const [locationQuery, setLocationQuery] = useState("");
   const [locationTypeFilter, setLocationTypeFilter] = useState<LocationType | "all">("all");
   const [pipelineStageFilter, setPipelineStageFilter] = useState<PipelineStage | "all">("all");
-  const [searchPending, startSearchTransition] = useTransition();
+  const [searchPending, setSearchPending] = useState(false);
 
   const visibleLocations = useMemo(() => {
     return locations.filter((location) => {
@@ -84,31 +84,32 @@ export function SearchPanel({
 
     const payload = { ...filters, industryQuery: nextQuery, limit: nextLimit ?? filters.limit };
 
-    startSearchTransition(async () => {
-      try {
-        const response = await fetch("/api/companies/search", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
-        });
+    setSearchPending(true);
+    try {
+      const response = await fetch("/api/companies/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
 
-        const data = (await response.json()) as {
-          companies?: ProspectCompany[];
-          creditEstimate?: ApolloCreditEstimate;
-          error?: string;
-        };
-        if (!response.ok) throw new Error(data.error || "Search failed.");
+      const data = (await response.json()) as {
+        companies?: ProspectCompany[];
+        creditEstimate?: ApolloCreditEstimate;
+        error?: string;
+      };
+      if (!response.ok) throw new Error(data.error || "Search failed.");
 
-        setHasSearched(true);
-        setQuery(nextQuery);
-        setCompanies(data.companies ?? []);
-        setCreditEstimate(data.creditEstimate ?? null);
-        setFilters((current) => ({ ...current, limit: payload.limit }));
-        setLimitInput(String(payload.limit));
-      } catch (error) {
-        setPageError(error instanceof Error ? error.message : "Search failed.");
-      }
-    });
+      setHasSearched(true);
+      setQuery(nextQuery);
+      setCompanies(data.companies ?? []);
+      setCreditEstimate(data.creditEstimate ?? null);
+      setFilters((current) => ({ ...current, limit: payload.limit }));
+      setLimitInput(String(payload.limit));
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Search failed.");
+    } finally {
+      setSearchPending(false);
+    }
   }
 
   async function runSearch() {
@@ -121,8 +122,67 @@ export function SearchPanel({
       setPageError("Paste at least one company, domain, or market query for bulk import.");
       return;
     }
-    setQuery(lines[0] || query);
-    await runSearchWithQuery(lines[0] || query, Math.min(Math.max(lines.length, 10), 20));
+
+    const maxBulkLines = 10;
+    if (lines.length > maxBulkLines) {
+      setPageError(`Bulk import supports up to ${maxBulkLines} lines at a time to stay within search limits.`);
+      return;
+    }
+
+    setPageError(null);
+    setPageSuccess(null);
+    setSearchPending(true);
+
+    try {
+      const mergedCompanies = new Map<string, ProspectCompany>();
+      let totalEstimatedOperations = 0;
+      let peopleSearchCalls = 0;
+      let organizationEnrichCalls = 0;
+      let note = "";
+      const perLineLimit = Math.min(Math.max(filters.limit, 1), 10);
+
+      for (const line of lines) {
+        const response = await fetch("/api/companies/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...filters, industryQuery: line, limit: perLineLimit })
+        });
+
+        const data = (await response.json()) as {
+          companies?: ProspectCompany[];
+          creditEstimate?: ApolloCreditEstimate;
+          error?: string;
+        };
+        if (!response.ok) throw new Error(data.error ? `${line}: ${data.error}` : `Search failed for ${line}.`);
+
+        for (const company of data.companies ?? []) {
+          mergedCompanies.set(company.id, company);
+        }
+
+        if (data.creditEstimate) {
+          totalEstimatedOperations += data.creditEstimate.totalEstimatedOperations;
+          peopleSearchCalls += data.creditEstimate.peopleSearchCalls;
+          organizationEnrichCalls += data.creditEstimate.organizationEnrichCalls;
+          note = note || data.creditEstimate.note;
+        }
+      }
+
+      const nextCompanies = [...mergedCompanies.values()];
+      setHasSearched(true);
+      setQuery(lines.join(", "));
+      setCompanies(nextCompanies);
+      setCreditEstimate({
+        peopleSearchCalls,
+        organizationEnrichCalls,
+        totalEstimatedOperations,
+        note: `Bulk import ran ${lines.length} search${lines.length === 1 ? "" : "es"}. ${note}`.trim()
+      });
+      setPageSuccess(`Bulk import searched ${lines.length} line${lines.length === 1 ? "" : "s"} and found ${nextCompanies.length} unique compan${nextCompanies.length === 1 ? "y" : "ies"}.`);
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "Bulk import failed.");
+    } finally {
+      setSearchPending(false);
+    }
   }
 
   async function handleOpenCompany(company: ProspectCompany) {

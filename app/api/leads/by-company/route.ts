@@ -4,8 +4,9 @@ import { NextResponse } from "next/server";
 import { z, ZodError } from "zod";
 import { searchLeadsForCompany } from "@/lib/apollo";
 import { MAX_CONTACT_SEARCH_LIMIT } from "@/lib/constants";
-import { cacheLeads } from "@/lib/db";
+import { cacheLeads, getSavedLocationById } from "@/lib/db";
 import { checkRateLimit, getRateLimitKey } from "@/lib/rate-limit";
+import { AuthRequired, resolveCurrentUserId } from "@/lib/auth-user";
 
 const searchFiltersSchema = z.object({
   personas: z
@@ -54,16 +55,27 @@ export async function POST(request: Request) {
   }
 
   try {
+    const userId = await resolveCurrentUserId();
     const body = await request.json();
     const payload = bodySchema.parse(body);
-    const leads = await searchLeadsForCompany(payload.filters, payload.company);
 
-    void cacheLeads(leads, payload.searchQuery || payload.company.name, {
+    if (payload.locationId) {
+      const location = await getSavedLocationById(userId, payload.locationId);
+      if (!location) {
+        return NextResponse.json({ error: "Location not found." }, { status: 404 });
+      }
+    }
+
+    const leads = await searchLeadsForCompany(payload.filters, payload.company);
+    const persistedLeads = await cacheLeads(userId, leads, payload.searchQuery || payload.company.name, {
       locationId: payload.locationId
     });
 
-    return NextResponse.json({ company: payload.company, leads, fromCache: false });
+    return NextResponse.json({ company: payload.company, leads: persistedLeads, fromCache: false });
   } catch (error) {
+    if (error instanceof AuthRequired) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     if (error instanceof ZodError) {
       return NextResponse.json({ error: error.errors[0]?.message ?? "Invalid request." }, { status: 400 });
     }

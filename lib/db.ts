@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { Pool, type PoolClient } from "pg";
 import { env } from "@/lib/env";
 import type {
@@ -72,6 +73,7 @@ function rowToLeadRecord(row: Record<string, unknown>): LeadRecord {
   return {
     lead: {
       id: row.id as string,
+      externalId: (row.external_id as string) ?? undefined,
       name: row.name as string,
       email: (row.email as string) ?? "",
       title,
@@ -171,28 +173,33 @@ async function withTransaction<T>(work: (client: PoolClient) => Promise<T>): Pro
 // ─── Leads ────────────────────────────────────────────────────────────────────
 
 export async function cacheLeads(
+  userId: number,
   records: LeadRecord[],
   searchQuery: string,
   options?: { locationId?: string }
-): Promise<void> {
-  if (records.length === 0) return;
+): Promise<LeadRecord[]> {
+  if (records.length === 0) return [];
 
   try {
-    await withTransaction(async (client) => {
+    return await withTransaction(async (client) => {
+      const cached: LeadRecord[] = [];
+
       for (const record of records) {
         const locationId = options?.locationId ?? record.lead.locationId ?? null;
         const department = resolveContactDepartment(record.lead.department, record.lead.title);
+        const externalId = record.lead.externalId || record.lead.id || randomUUID();
+        const id = randomUUID();
 
-        await client.query(
+        const { rows } = await client.query(
           `INSERT INTO leads (
-            id, name, email, title, linkedin_url, company_name, company_domain, organization_id,
+            id, user_id, external_id, name, email, title, linkedin_url, company_name, company_domain, organization_id,
             industry, employee_count, hq_city, hq_state, hq_country, keywords, tech_stack, about,
             delivery_zone, priority_score, search_query, fetched_at, location_id, department,
             source, email_source
           ) VALUES (
-            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,NOW(),$20,$21,$22,$23
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,NOW(),$22,$23,$24,$25
           )
-          ON CONFLICT (id) DO UPDATE SET
+          ON CONFLICT (user_id, external_id) WHERE external_id IS NOT NULL DO UPDATE SET
             name = EXCLUDED.name,
             email = EXCLUDED.email,
             title = EXCLUDED.title,
@@ -215,9 +222,12 @@ export async function cacheLeads(
             location_id = COALESCE(EXCLUDED.location_id, leads.location_id),
             department = COALESCE(EXCLUDED.department, leads.department),
             source = COALESCE(EXCLUDED.source, leads.source),
-            email_source = COALESCE(EXCLUDED.email_source, leads.email_source)`,
+            email_source = COALESCE(EXCLUDED.email_source, leads.email_source)
+          RETURNING *`,
           [
-            record.lead.id,
+            id,
+            userId,
+            externalId,
             record.lead.name,
             record.lead.email || null,
             record.lead.title || null,
@@ -242,17 +252,26 @@ export async function cacheLeads(
             record.lead.emailSource ?? null
           ]
         );
+
+        cached.push(rowToLeadRecord(rows[0] as Record<string, unknown>));
       }
+
+      return cached;
     });
   } catch (error) {
     console.error("[db] cacheLeads error:", error instanceof Error ? error.message : error);
+    return records;
   }
 }
 
-export async function getCachedLeads(searchQuery: string, maxAgeHours?: number): Promise<LeadRecord[] | null> {
+export async function getCachedLeads(
+  userId: number,
+  searchQuery: string,
+  maxAgeHours?: number
+): Promise<LeadRecord[] | null> {
   const pool = getPool();
-  const params: unknown[] = [searchQuery];
-  let sql = "SELECT * FROM leads WHERE search_query = $1";
+  const params: unknown[] = [userId, searchQuery];
+  let sql = "SELECT * FROM leads WHERE user_id = $1 AND search_query = $2";
 
   if (typeof maxAgeHours === "number" && Number.isFinite(maxAgeHours)) {
     params.push(new Date(Date.now() - maxAgeHours * 60 * 60 * 1000).toISOString());
@@ -272,6 +291,7 @@ export async function getCachedLeads(searchQuery: string, maxAgeHours?: number):
 }
 
 export async function getRecentSearches(
+  userId: number,
   limit = 5
 ): Promise<Array<{ query: string; count: number; fetchedAt: string }>> {
   try {
@@ -282,11 +302,11 @@ export async function getRecentSearches(
     }>(
       `SELECT search_query, COUNT(*)::text AS count, MAX(fetched_at) AS fetched_at
        FROM leads
-       WHERE search_query IS NOT NULL
+       WHERE user_id = $1 AND search_query IS NOT NULL
        GROUP BY search_query
        ORDER BY MAX(fetched_at) DESC
-       LIMIT $1`,
-      [limit]
+       LIMIT $2`,
+      [userId, limit]
     );
 
     return rows.map((row) => ({
@@ -300,11 +320,11 @@ export async function getRecentSearches(
   }
 }
 
-export async function getLocationContacts(locationId: string): Promise<LeadRecord[]> {
+export async function getLocationContacts(userId: number, locationId: string): Promise<LeadRecord[]> {
   try {
     const { rows } = await getPool().query(
-      "SELECT * FROM leads WHERE location_id = $1 ORDER BY priority_score DESC, name ASC",
-      [locationId]
+      "SELECT * FROM leads WHERE user_id = $1 AND location_id = $2 ORDER BY priority_score DESC, name ASC",
+      [userId, locationId]
     );
     return rows.map((row) => rowToLeadRecord(row as Record<string, unknown>));
   } catch (error) {
@@ -313,7 +333,22 @@ export async function getLocationContacts(locationId: string): Promise<LeadRecor
   }
 }
 
+export async function getLeadById(userId: number, leadId: string): Promise<LeadRecord | null> {
+  try {
+    const { rows } = await getPool().query(
+      "SELECT * FROM leads WHERE id = $1 AND user_id = $2 LIMIT 1",
+      [leadId, userId]
+    );
+    if (rows.length === 0) return null;
+    return rowToLeadRecord(rows[0] as Record<string, unknown>);
+  } catch (error) {
+    console.error("[db] getLeadById error:", error instanceof Error ? error.message : error);
+    return null;
+  }
+}
+
 export async function updateLeadContact(
+  userId: number,
   leadId: string,
   updates: {
     email?: string;
@@ -323,7 +358,7 @@ export async function updateLeadContact(
     locationId?: string;
     emailSource?: "apollo" | "tomba" | "ai" | "existing" | null;
   }
-): Promise<void> {
+): Promise<boolean> {
   const sets: string[] = [];
   const params: unknown[] = [];
 
@@ -352,29 +387,36 @@ export async function updateLeadContact(
     sets.push(`email_source = $${params.length}`);
   }
 
-  if (sets.length === 0) return;
+  if (sets.length === 0) return true;
 
   sets.push("fetched_at = NOW()");
   params.push(leadId);
 
   try {
-    await getPool().query(`UPDATE leads SET ${sets.join(", ")} WHERE id = $${params.length}`, params);
+    params.push(userId);
+    const result = await getPool().query(
+      `UPDATE leads SET ${sets.join(", ")} WHERE id = $${params.length - 1} AND user_id = $${params.length}`,
+      params
+    );
+    return (result.rowCount ?? 0) > 0;
   } catch (error) {
     console.error("[db] updateLeadContact error:", error instanceof Error ? error.message : error);
+    throw error;
   }
 }
 
 // ─── Pitches ──────────────────────────────────────────────────────────────────
 
-export async function cachePitch(leadId: string, pitch: GeneratedPitch): Promise<void> {
+export async function cachePitch(userId: number, leadId: string, pitch: GeneratedPitch): Promise<void> {
   try {
     await withTransaction(async (client) => {
-      await client.query("DELETE FROM pitches WHERE lead_id = $1", [leadId]);
+      await client.query("DELETE FROM pitches WHERE user_id = $1 AND lead_id = $2", [userId, leadId]);
       await client.query(
         `INSERT INTO pitches (
-          lead_id, subject, body, talking_points, bridge_insight, summary, pain_points, variable_evidence
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          user_id, lead_id, subject, body, talking_points, bridge_insight, summary, pain_points, variable_evidence
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
         [
+          userId,
           leadId,
           pitch.subject,
           pitch.body,
@@ -391,9 +433,13 @@ export async function cachePitch(leadId: string, pitch: GeneratedPitch): Promise
   }
 }
 
-export async function getCachedPitch(leadId: string, maxAgeHours?: number): Promise<GeneratedPitch | null> {
-  const params: unknown[] = [leadId];
-  let sql = "SELECT * FROM pitches WHERE lead_id = $1";
+export async function getCachedPitch(
+  userId: number,
+  leadId: string,
+  maxAgeHours?: number
+): Promise<GeneratedPitch | null> {
+  const params: unknown[] = [userId, leadId];
+  let sql = "SELECT * FROM pitches WHERE user_id = $1 AND lead_id = $2";
 
   if (typeof maxAgeHours === "number" && Number.isFinite(maxAgeHours)) {
     params.push(new Date(Date.now() - maxAgeHours * 60 * 60 * 1000).toISOString());
@@ -447,6 +493,9 @@ export async function upsertSavedLocation(
     input.notes || null,
     input.deliveryZone
   ];
+  const conflictTarget = input.organizationId
+    ? "(user_id, organization_id) WHERE organization_id IS NOT NULL"
+    : "(id)";
 
   const { rows } = await getPool().query(
     `INSERT INTO saved_locations (
@@ -456,7 +505,7 @@ export async function upsertSavedLocation(
     ) VALUES (
       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17
     )
-    ON CONFLICT (id) DO UPDATE SET
+    ON CONFLICT ${conflictTarget} DO UPDATE SET
       organization_id = EXCLUDED.organization_id,
       company_name = EXCLUDED.company_name,
       company_domain = EXCLUDED.company_domain,
@@ -490,7 +539,7 @@ export async function saveProspectCompanyAsLocation(
   company: ProspectCompany
 ): Promise<SavedLocation> {
   return upsertSavedLocation(userId, {
-    id: company.id,
+    id: randomUUID(),
     organizationId: company.id,
     companyName: company.name,
     companyDomain: company.domain,
@@ -544,17 +593,17 @@ export async function listSavedLocations(filters: SavedLocationFilters): Promise
       COALESCE(ec.emails_count, 0) AS emails_count
     FROM saved_locations sl
     LEFT JOIN (
-      SELECT location_id, COUNT(*)::int AS contacts_count
+      SELECT user_id, location_id, COUNT(*)::int AS contacts_count
       FROM leads
       WHERE location_id IS NOT NULL
-      GROUP BY location_id
-    ) lc ON lc.location_id = sl.id
+      GROUP BY user_id, location_id
+    ) lc ON lc.location_id = sl.id AND lc.user_id = sl.user_id
     LEFT JOIN (
-      SELECT location_id, COUNT(*)::int AS emails_count
+      SELECT user_id, location_id, COUNT(*)::int AS emails_count
       FROM emails
       WHERE location_id IS NOT NULL
-      GROUP BY location_id
-    ) ec ON ec.location_id = sl.id
+      GROUP BY user_id, location_id
+    ) ec ON ec.location_id = sl.id AND ec.user_id = sl.user_id
     WHERE ${conditions.join(" AND ")}
     ORDER BY sl.updated_at DESC
     LIMIT $${params.length}
@@ -588,7 +637,7 @@ export async function getLocationDetail(userId: number, id: string): Promise<Loc
   if (!location) return null;
 
   const [contacts, emails] = await Promise.all([
-    getLocationContacts(id),
+    getLocationContacts(userId, id),
     getLocationEmails(userId, id)
   ]);
   return { location, contacts, emails };
@@ -802,6 +851,29 @@ export async function replaceEmailsForLead(
 ): Promise<StoredEmail[]> {
   try {
     return await withTransaction(async (client) => {
+      const leadResult = await client.query("SELECT id FROM leads WHERE id = $1 AND user_id = $2 LIMIT 1", [
+        leadId,
+        userId
+      ]);
+      if (leadResult.rows.length === 0) {
+        throw new Error("Lead not found for this user.");
+      }
+
+      const locationIds = [
+        ...new Set(emails.map((email) => email.locationId).filter((value): value is string => Boolean(value)))
+      ];
+      if (locationIds.length > 0) {
+        const locationResult = await client.query<{ id: string }>(
+          "SELECT id FROM saved_locations WHERE user_id = $1 AND id = ANY($2::text[])",
+          [userId, locationIds]
+        );
+        const ownedLocationIds = new Set(locationResult.rows.map((row) => row.id));
+        const unownedLocationId = locationIds.find((id) => !ownedLocationIds.has(id));
+        if (unownedLocationId) {
+          throw new Error("Location not found for this user.");
+        }
+      }
+
       await client.query("DELETE FROM emails WHERE lead_id = $1 AND user_id = $2", [leadId, userId]);
 
       const created: StoredEmail[] = [];
@@ -838,7 +910,7 @@ export async function replaceEmailsForLead(
     });
   } catch (error) {
     console.error("[db] replaceEmailsForLead error:", error instanceof Error ? error.message : error);
-    return [];
+    throw error;
   }
 }
 
