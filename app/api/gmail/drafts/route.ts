@@ -21,6 +21,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       draftId: draft.id,
       messageId: draft.message?.id,
+      threadId: draft.message?.threadId,
       gmailUrl: "https://mail.google.com/mail/u/0/#drafts"
     });
   } catch (error) {

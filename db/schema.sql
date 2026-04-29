@@ -121,6 +121,8 @@ CREATE TABLE IF NOT EXISTS saved_locations (
   pitch_type        TEXT        NOT NULL DEFAULT 'farmers_fridge',
   notes             TEXT,
   delivery_zone     TEXT        NOT NULL DEFAULT 'Other',
+  fit_score         INTEGER     NOT NULL DEFAULT 0,
+  fit_reasons       TEXT[]      NOT NULL DEFAULT '{}',
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -128,11 +130,14 @@ CREATE TABLE IF NOT EXISTS saved_locations (
 -- Backfill for installs created before user_id existed.
 ALTER TABLE saved_locations ADD COLUMN IF NOT EXISTS user_id INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE saved_locations ALTER COLUMN id SET DEFAULT gen_random_uuid()::text;
+ALTER TABLE saved_locations ADD COLUMN IF NOT EXISTS fit_score   INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE saved_locations ADD COLUMN IF NOT EXISTS fit_reasons TEXT[]  NOT NULL DEFAULT '{}';
 
 CREATE INDEX IF NOT EXISTS saved_locations_user_idx     ON saved_locations (user_id);
 CREATE INDEX IF NOT EXISTS saved_locations_pipeline_idx ON saved_locations (pipeline_stage);
 CREATE INDEX IF NOT EXISTS saved_locations_type_idx     ON saved_locations (location_type);
 CREATE INDEX IF NOT EXISTS saved_locations_updated_idx  ON saved_locations (updated_at DESC);
+CREATE INDEX IF NOT EXISTS saved_locations_fit_idx      ON saved_locations (fit_score DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS saved_locations_user_org_idx
   ON saved_locations (user_id, organization_id)
   WHERE organization_id IS NOT NULL;
@@ -164,17 +169,54 @@ CREATE TABLE IF NOT EXISTS emails (
   body              TEXT        NOT NULL,
   status            TEXT        NOT NULL DEFAULT 'generated',
   gmail_draft_url   TEXT,
+  gmail_draft_id    TEXT,
+  gmail_message_id  TEXT,
+  gmail_thread_id   TEXT,
+  scheduled_for     TIMESTAMPTZ,
+  sent_at           TIMESTAMPTZ,
+  reply_detected_at TIMESTAMPTZ,
+  quality_score     INTEGER     NOT NULL DEFAULT 0,
+  quality_issues    TEXT[]      NOT NULL DEFAULT '{}',
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Backfill for installs created before user_id existed.
 ALTER TABLE emails ADD COLUMN IF NOT EXISTS user_id INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE emails ADD COLUMN IF NOT EXISTS gmail_draft_id    TEXT;
+ALTER TABLE emails ADD COLUMN IF NOT EXISTS gmail_message_id  TEXT;
+ALTER TABLE emails ADD COLUMN IF NOT EXISTS gmail_thread_id   TEXT;
+ALTER TABLE emails ADD COLUMN IF NOT EXISTS scheduled_for     TIMESTAMPTZ;
+ALTER TABLE emails ADD COLUMN IF NOT EXISTS sent_at           TIMESTAMPTZ;
+ALTER TABLE emails ADD COLUMN IF NOT EXISTS reply_detected_at TIMESTAMPTZ;
+ALTER TABLE emails ADD COLUMN IF NOT EXISTS quality_score     INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE emails ADD COLUMN IF NOT EXISTS quality_issues    TEXT[]  NOT NULL DEFAULT '{}';
 
 CREATE INDEX IF NOT EXISTS emails_user_idx        ON emails (user_id);
 CREATE INDEX IF NOT EXISTS emails_location_id_idx ON emails (location_id);
 CREATE INDEX IF NOT EXISTS emails_status_idx      ON emails (status);
 CREATE INDEX IF NOT EXISTS emails_created_at_idx  ON emails (created_at DESC);
+CREATE INDEX IF NOT EXISTS emails_scheduled_idx   ON emails (scheduled_for);
+CREATE INDEX IF NOT EXISTS emails_gmail_thread_idx ON emails (gmail_thread_id);
+
+-- ─── Research evidence ───────────────────────────────────────────────────────
+-- Web research snippets and sources used to personalize outreach.
+
+CREATE TABLE IF NOT EXISTS research_evidence (
+  id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id      INTEGER     NOT NULL DEFAULT 1,
+  location_id  TEXT        REFERENCES saved_locations(id) ON DELETE CASCADE,
+  lead_id      TEXT        REFERENCES leads(id) ON DELETE SET NULL,
+  source_title TEXT,
+  source_url   TEXT,
+  snippet      TEXT        NOT NULL,
+  confidence   NUMERIC,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS research_evidence_user_idx     ON research_evidence (user_id);
+CREATE INDEX IF NOT EXISTS research_evidence_location_idx ON research_evidence (location_id);
+CREATE INDEX IF NOT EXISTS research_evidence_lead_idx     ON research_evidence (lead_id);
 
 -- ─── Tone of voice settings ───────────────────────────────────────────────────
 -- One row per user (scoped by the Auth.js users.id). For the current single-

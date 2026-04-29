@@ -11,11 +11,14 @@ import type {
   PipelineStage,
   PitchType,
   ProspectCompany,
+  ResearchEvidence,
   SavedLocation,
   SavedLocationSummary,
   StoredEmail,
   ToneSettings
 } from "@/lib/types";
+import { analyzeEmailQuality, statusAfterQualityCheck } from "@/lib/email-quality";
+import { calculatePlacementFit } from "@/lib/fit-score";
 import { inferLocationType, resolveContactDepartment } from "@/lib/utils";
 
 declare global {
@@ -39,11 +42,18 @@ type EmailFilters = {
   limit?: number;
 };
 
-type SavedLocationInput = Omit<SavedLocation, "createdAt" | "updatedAt">;
+type SavedLocationInput = Omit<SavedLocation, "createdAt" | "updatedAt" | "fitScore" | "fitReasons">;
 
-type StoredEmailInput = Omit<StoredEmail, "id" | "createdAt" | "updatedAt" | "status"> & {
+type StoredEmailInput = Omit<
+  StoredEmail,
+  "id" | "createdAt" | "updatedAt" | "status" | "qualityScore" | "qualityIssues"
+> & {
   status?: EmailStatus;
+  qualityScore?: number;
+  qualityIssues?: string[];
 };
+
+type ResearchEvidenceInput = Omit<ResearchEvidence, "id" | "userId" | "createdAt">;
 
 export function getPool(): Pool {
   if (!global.__pgPool) {
@@ -122,6 +132,8 @@ function rowToSavedLocation(row: Record<string, unknown>): SavedLocation {
     pitchType: (row.pitch_type as SavedLocation["pitchType"]) ?? "farmers_fridge",
     notes: (row.notes as string) ?? undefined,
     deliveryZone: (row.delivery_zone as SavedLocation["deliveryZone"]) ?? "Other",
+    fitScore: Number(row.fit_score ?? 0),
+    fitReasons: asStringArray(row.fit_reasons),
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at)
   };
@@ -150,8 +162,30 @@ function rowToStoredEmail(row: Record<string, unknown>): StoredEmail {
     body: (row.body as string) ?? "",
     status: (row.status as EmailStatus) ?? "generated",
     gmailDraftUrl: (row.gmail_draft_url as string) ?? undefined,
+    gmailDraftId: (row.gmail_draft_id as string) ?? undefined,
+    gmailMessageId: (row.gmail_message_id as string) ?? undefined,
+    gmailThreadId: (row.gmail_thread_id as string) ?? undefined,
+    scheduledFor: row.scheduled_for ? toIso(row.scheduled_for) : undefined,
+    sentAt: row.sent_at ? toIso(row.sent_at) : undefined,
+    replyDetectedAt: row.reply_detected_at ? toIso(row.reply_detected_at) : undefined,
+    qualityScore: Number(row.quality_score ?? 0),
+    qualityIssues: asStringArray(row.quality_issues),
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at)
+  };
+}
+
+function rowToResearchEvidence(row: Record<string, unknown>): ResearchEvidence {
+  return {
+    id: row.id as string,
+    userId: Number(row.user_id ?? 0),
+    locationId: (row.location_id as string) ?? undefined,
+    leadId: (row.lead_id as string) ?? undefined,
+    sourceTitle: (row.source_title as string) ?? undefined,
+    sourceUrl: (row.source_url as string) ?? undefined,
+    snippet: (row.snippet as string) ?? "",
+    confidence: row.confidence === null || row.confidence === undefined ? undefined : Number(row.confidence),
+    createdAt: toIso(row.created_at)
   };
 }
 
@@ -427,6 +461,27 @@ export async function cachePitch(userId: number, leadId: string, pitch: Generate
           pitch.variableEvidence
         ]
       );
+
+      if (pitch.researchEvidence && pitch.researchEvidence.length > 0) {
+        await client.query("DELETE FROM research_evidence WHERE user_id = $1 AND lead_id = $2", [userId, leadId]);
+        for (const evidence of pitch.researchEvidence.slice(0, 8)) {
+          if (!evidence.snippet.trim()) continue;
+          await client.query(
+            `INSERT INTO research_evidence (
+              user_id, location_id, lead_id, source_title, source_url, snippet, confidence
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+            [
+              userId,
+              evidence.locationId || null,
+              leadId,
+              evidence.sourceTitle || null,
+              evidence.sourceUrl || null,
+              evidence.snippet,
+              evidence.confidence ?? null
+            ]
+          );
+        }
+      }
     });
   } catch (error) {
     console.error("[db] cachePitch error:", error instanceof Error ? error.message : error);
@@ -453,6 +508,8 @@ export async function getCachedPitch(
     if (rows.length === 0) return null;
     const row = rows[0] as Record<string, unknown>;
 
+    const researchEvidence = await listResearchEvidenceForLead(userId, leadId);
+
     return {
       subject: (row.subject as string) ?? "",
       body: (row.body as string) ?? "",
@@ -460,11 +517,86 @@ export async function getCachedPitch(
       bridgeInsight: (row.bridge_insight as string) ?? "",
       summary: (row.summary as string) ?? "",
       painPoints: asStringArray(row.pain_points),
-      variableEvidence: asStringArray(row.variable_evidence)
+      variableEvidence: asStringArray(row.variable_evidence),
+      researchEvidence
     };
   } catch (error) {
     console.error("[db] getCachedPitch error:", error instanceof Error ? error.message : error);
     return null;
+  }
+}
+
+export async function replaceResearchEvidence(
+  userId: number,
+  leadId: string,
+  evidence: ResearchEvidenceInput[]
+): Promise<ResearchEvidence[]> {
+  try {
+    return await withTransaction(async (client) => {
+      await client.query("DELETE FROM research_evidence WHERE user_id = $1 AND lead_id = $2", [userId, leadId]);
+      const created: ResearchEvidence[] = [];
+
+      for (const item of evidence.slice(0, 8)) {
+        if (!item.snippet.trim()) continue;
+        const { rows } = await client.query(
+          `INSERT INTO research_evidence (
+            user_id, location_id, lead_id, source_title, source_url, snippet, confidence
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+          RETURNING *`,
+          [
+            userId,
+            item.locationId || null,
+            leadId,
+            item.sourceTitle || null,
+            item.sourceUrl || null,
+            item.snippet,
+            item.confidence ?? null
+          ]
+        );
+        created.push(rowToResearchEvidence(rows[0] as Record<string, unknown>));
+      }
+
+      return created;
+    });
+  } catch (error) {
+    console.error("[db] replaceResearchEvidence error:", error instanceof Error ? error.message : error);
+    return [];
+  }
+}
+
+export async function listResearchEvidenceForLead(userId: number, leadId: string): Promise<ResearchEvidence[]> {
+  try {
+    const { rows } = await getPool().query(
+      `SELECT *
+       FROM research_evidence
+       WHERE user_id = $1 AND lead_id = $2
+       ORDER BY created_at DESC`,
+      [userId, leadId]
+    );
+    return rows.map((row) => rowToResearchEvidence(row as Record<string, unknown>));
+  } catch (error) {
+    console.error("[db] listResearchEvidenceForLead error:", error instanceof Error ? error.message : error);
+    return [];
+  }
+}
+
+export async function listResearchEvidenceForLocation(
+  userId: number,
+  locationId: string
+): Promise<ResearchEvidence[]> {
+  try {
+    const { rows } = await getPool().query(
+      `SELECT *
+       FROM research_evidence
+       WHERE user_id = $1 AND location_id = $2
+       ORDER BY created_at DESC
+       LIMIT 100`,
+      [userId, locationId]
+    );
+    return rows.map((row) => rowToResearchEvidence(row as Record<string, unknown>));
+  } catch (error) {
+    console.error("[db] listResearchEvidenceForLocation error:", error instanceof Error ? error.message : error);
+    return [];
   }
 }
 
@@ -474,6 +606,17 @@ export async function upsertSavedLocation(
   userId: number,
   input: SavedLocationInput
 ): Promise<SavedLocation> {
+  const fit = calculatePlacementFit({
+    companyName: input.companyName,
+    industry: input.industry,
+    employeeCount: input.employeeCount,
+    hqCity: input.hqCity,
+    hqState: input.hqState,
+    about: input.about,
+    category: input.category,
+    locationType: input.locationType,
+    deliveryZone: input.deliveryZone
+  });
   const params = [
     input.id,
     userId,
@@ -491,7 +634,9 @@ export async function upsertSavedLocation(
     input.pipelineStage,
     input.pitchType,
     input.notes || null,
-    input.deliveryZone
+    input.deliveryZone,
+    fit.score,
+    fit.reasons
   ];
   const conflictTarget = input.organizationId
     ? "(user_id, organization_id) WHERE organization_id IS NOT NULL"
@@ -501,9 +646,9 @@ export async function upsertSavedLocation(
     `INSERT INTO saved_locations (
       id, user_id, organization_id, company_name, company_domain, industry, employee_count,
       hq_city, hq_state, hq_country, about, category, location_type, pipeline_stage,
-      pitch_type, notes, delivery_zone
+      pitch_type, notes, delivery_zone, fit_score, fit_reasons
     ) VALUES (
-      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19
     )
     ON CONFLICT ${conflictTarget} DO UPDATE SET
       organization_id = EXCLUDED.organization_id,
@@ -521,6 +666,8 @@ export async function upsertSavedLocation(
       pitch_type = COALESCE(saved_locations.pitch_type, EXCLUDED.pitch_type),
       notes = COALESCE(saved_locations.notes, EXCLUDED.notes),
       delivery_zone = EXCLUDED.delivery_zone,
+      fit_score = EXCLUDED.fit_score,
+      fit_reasons = EXCLUDED.fit_reasons,
       updated_at = NOW()
     WHERE saved_locations.user_id = EXCLUDED.user_id
     RETURNING *`,
@@ -636,11 +783,12 @@ export async function getLocationDetail(userId: number, id: string): Promise<Loc
   const location = await getSavedLocationById(userId, id);
   if (!location) return null;
 
-  const [contacts, emails] = await Promise.all([
+  const [contacts, emails, researchEvidence] = await Promise.all([
     getLocationContacts(userId, id),
-    getLocationEmails(userId, id)
+    getLocationEmails(userId, id),
+    listResearchEvidenceForLocation(userId, id)
   ]);
-  return { location, contacts, emails };
+  return { location, contacts, emails, researchEvidence };
 }
 
 export async function updateSavedLocation(
@@ -682,6 +830,25 @@ export async function updateSavedLocation(
     return getSavedLocationById(userId, id);
   }
 
+  const currentLocation = await getSavedLocationById(userId, id);
+  if (!currentLocation) return null;
+  const nextLocation = { ...currentLocation, ...updates };
+  const fit = calculatePlacementFit({
+    companyName: nextLocation.companyName,
+    industry: nextLocation.industry,
+    employeeCount: nextLocation.employeeCount,
+    hqCity: nextLocation.hqCity,
+    hqState: nextLocation.hqState,
+    about: nextLocation.about,
+    category: nextLocation.category,
+    locationType: nextLocation.locationType,
+    deliveryZone: nextLocation.deliveryZone
+  });
+  params.push(fit.score);
+  sets.push(`fit_score = $${params.length}`);
+  params.push(fit.reasons);
+  sets.push(`fit_reasons = $${params.length}`);
+
   sets.push("updated_at = NOW()");
   params.push(id);
   const idParamIdx = params.length;
@@ -717,6 +884,10 @@ export async function getDashboardStats(userId: number): Promise<DashboardStats>
     locationsCount: 0,
     draftsCount: 0,
     wonCount: 0,
+    dueTodayCount: 0,
+    repliedCount: 0,
+    highFitCount: 0,
+    averageFitScore: 0,
     pipelineByStage: {
       prospect: 0,
       meeting: 0,
@@ -739,10 +910,24 @@ export async function getDashboardStats(userId: number): Promise<DashboardStats>
         locations_count: string;
         drafts_count: string;
         won_count: string;
+        due_today_count: string;
+        replied_count: string;
+        high_fit_count: string;
+        average_fit_score: string;
       }>(
         `SELECT
           COUNT(*)::text AS locations_count,
           (SELECT COUNT(*)::text FROM emails WHERE user_id = $1) AS drafts_count,
+          (SELECT COUNT(*)::text FROM emails
+            WHERE user_id = $1
+              AND scheduled_for IS NOT NULL
+              AND scheduled_for <= NOW()
+              AND status NOT IN ('sent', 'replied')) AS due_today_count,
+          (SELECT COUNT(*)::text FROM emails
+            WHERE user_id = $1
+              AND (status = 'replied' OR reply_detected_at IS NOT NULL)) AS replied_count,
+          COUNT(*) FILTER (WHERE fit_score >= 75)::text AS high_fit_count,
+          COALESCE(ROUND(AVG(NULLIF(fit_score, 0)))::text, '0') AS average_fit_score,
           COUNT(*) FILTER (WHERE pipeline_stage = 'won')::text AS won_count
          FROM saved_locations
          WHERE user_id = $1`,
@@ -769,6 +954,10 @@ export async function getDashboardStats(userId: number): Promise<DashboardStats>
       stats.locationsCount = Number(summary.locations_count ?? 0);
       stats.draftsCount = Number(summary.drafts_count ?? 0);
       stats.wonCount = Number(summary.won_count ?? 0);
+      stats.dueTodayCount = Number(summary.due_today_count ?? 0);
+      stats.repliedCount = Number(summary.replied_count ?? 0);
+      stats.highFitCount = Number(summary.high_fit_count ?? 0);
+      stats.averageFitScore = Number(summary.average_fit_score ?? 0);
     }
 
     for (const row of stageResult.rows) {
@@ -878,12 +1067,16 @@ export async function replaceEmailsForLead(
 
       const created: StoredEmail[] = [];
       for (const email of emails) {
+        const quality = analyzeEmailQuality(email);
+        const status = statusAfterQualityCheck(email.status, quality);
         const { rows } = await client.query(
           `INSERT INTO emails (
             user_id, location_id, lead_id, contact_name, contact_email, contact_title, company_name,
-            location_type, sequence_step, subject, body, status, gmail_draft_url
+            location_type, sequence_step, subject, body, status, gmail_draft_url, gmail_draft_id,
+            gmail_message_id, gmail_thread_id, scheduled_for, sent_at, reply_detected_at,
+            quality_score, quality_issues
           ) VALUES (
-            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20
           )
           RETURNING *`,
           [
@@ -898,8 +1091,16 @@ export async function replaceEmailsForLead(
             email.sequenceStep,
             email.subject,
             email.body,
-            email.status || "approved",
-            email.gmailDraftUrl || null
+            status,
+            email.gmailDraftUrl || null,
+            email.gmailDraftId || null,
+            email.gmailMessageId || null,
+            email.gmailThreadId || null,
+            email.scheduledFor || null,
+            email.sentAt || null,
+            email.replyDetectedAt || null,
+            email.qualityScore ?? quality.score,
+            email.qualityIssues ?? quality.issues
           ]
         );
 
@@ -914,10 +1115,40 @@ export async function replaceEmailsForLead(
   }
 }
 
+export async function getEmailById(userId: number, id: string): Promise<StoredEmail | null> {
+  try {
+    const { rows } = await getPool().query(
+      "SELECT * FROM emails WHERE id = $1 AND user_id = $2 LIMIT 1",
+      [id, userId]
+    );
+    if (rows.length === 0) return null;
+    return rowToStoredEmail(rows[0] as Record<string, unknown>);
+  } catch (error) {
+    console.error("[db] getEmailById error:", error instanceof Error ? error.message : error);
+    return null;
+  }
+}
+
 export async function updateEmail(
   userId: number,
   id: string,
-  updates: Partial<Pick<StoredEmail, "subject" | "body" | "status" | "gmailDraftUrl">>
+  updates: Partial<
+    Pick<
+      StoredEmail,
+      | "subject"
+      | "body"
+      | "status"
+      | "gmailDraftUrl"
+      | "gmailDraftId"
+      | "gmailMessageId"
+      | "gmailThreadId"
+      | "scheduledFor"
+      | "sentAt"
+      | "replyDetectedAt"
+      | "qualityScore"
+      | "qualityIssues"
+    >
+  >
 ): Promise<StoredEmail | null> {
   const sets: string[] = [];
   const params: unknown[] = [];
@@ -937,6 +1168,57 @@ export async function updateEmail(
   if (updates.gmailDraftUrl !== undefined) {
     params.push(updates.gmailDraftUrl || null);
     sets.push(`gmail_draft_url = $${params.length}`);
+  }
+  if (updates.gmailDraftId !== undefined) {
+    params.push(updates.gmailDraftId || null);
+    sets.push(`gmail_draft_id = $${params.length}`);
+  }
+  if (updates.gmailMessageId !== undefined) {
+    params.push(updates.gmailMessageId || null);
+    sets.push(`gmail_message_id = $${params.length}`);
+  }
+  if (updates.gmailThreadId !== undefined) {
+    params.push(updates.gmailThreadId || null);
+    sets.push(`gmail_thread_id = $${params.length}`);
+  }
+  if (updates.scheduledFor !== undefined) {
+    params.push(updates.scheduledFor || null);
+    sets.push(`scheduled_for = $${params.length}`);
+  }
+  if (updates.sentAt !== undefined) {
+    params.push(updates.sentAt || null);
+    sets.push(`sent_at = $${params.length}`);
+  }
+  if (updates.replyDetectedAt !== undefined) {
+    params.push(updates.replyDetectedAt || null);
+    sets.push(`reply_detected_at = $${params.length}`);
+  }
+  if (updates.qualityScore !== undefined) {
+    params.push(updates.qualityScore);
+    sets.push(`quality_score = $${params.length}`);
+  }
+  if (updates.qualityIssues !== undefined) {
+    params.push(updates.qualityIssues);
+    sets.push(`quality_issues = $${params.length}`);
+  }
+
+  if ((updates.subject !== undefined || updates.body !== undefined) && updates.qualityScore === undefined) {
+    const current = await getEmailById(userId, id);
+    if (current) {
+      const quality = analyzeEmailQuality({
+        ...current,
+        subject: updates.subject ?? current.subject,
+        body: updates.body ?? current.body
+      });
+      params.push(quality.score);
+      sets.push(`quality_score = $${params.length}`);
+      params.push(quality.issues);
+      sets.push(`quality_issues = $${params.length}`);
+      if (updates.status === undefined && current.status !== "sent" && current.status !== "replied") {
+        params.push(statusAfterQualityCheck(current.status, quality));
+        sets.push(`status = $${params.length}`);
+      }
+    }
   }
 
   if (sets.length === 0) {

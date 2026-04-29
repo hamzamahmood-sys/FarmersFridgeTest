@@ -78,6 +78,7 @@ export function LocationDetail({
   const currentLocation = locationDetail.location;
   const currentContacts = locationDetail.contacts;
   const currentLocationEmails = locationDetail.emails;
+  const currentResearchEvidence = locationDetail.researchEvidence;
   const isPreviewLocation = isPreviewLocationId(currentLocation.id);
 
   const [notesDraft, setNotesDraft] = useState(currentLocation.notes || "");
@@ -636,7 +637,8 @@ export function LocationDetail({
             sequenceStep: 1,
             subject: research.pitch.subject,
             body: research.pitch.body,
-            status: "generated" as const
+            status: "scheduled" as const,
+            scheduledFor: scheduledForStep(1)
           },
           {
             locationId: currentLocation.id,
@@ -648,7 +650,8 @@ export function LocationDetail({
             sequenceStep: 2,
             subject: followUp1.subject,
             body: followUp1.body,
-            status: "generated" as const
+            status: "scheduled" as const,
+            scheduledFor: scheduledForStep(2)
           },
           {
             locationId: currentLocation.id,
@@ -660,7 +663,8 @@ export function LocationDetail({
             sequenceStep: 3,
             subject: followUp2.subject,
             body: followUp2.body,
-            status: "generated" as const
+            status: "scheduled" as const,
+            scheduledFor: scheduledForStep(3)
           }
         ];
 
@@ -708,6 +712,13 @@ export function LocationDetail({
   function resetContactFilters() {
     setContactSearch("");
     setDepartmentFilter("all");
+  }
+
+  function scheduledForStep(step: 1 | 2 | 3): string {
+    const date = new Date();
+    date.setDate(date.getDate() + (step === 1 ? 0 : step === 2 ? 5 : 10));
+    date.setHours(9, 0, 0, 0);
+    return date.toISOString();
   }
 
   return (
@@ -804,7 +815,18 @@ export function LocationDetail({
             <span>{currentContacts.length} contacts loaded</span>
             <span>search depth {currentContactSearchLimit}</span>
             <span>{currentLocationEmails.length} queued emails</span>
+            <span>{currentLocation.fitScore} FF fit</span>
           </div>
+          {currentLocation.fitReasons.length > 0 ? (
+            <ul className="fitReasonList">
+              {currentLocation.fitReasons.map((reason) => (
+                <li key={reason}>{reason}</li>
+              ))}
+            </ul>
+          ) : null}
+          {currentResearchEvidence.length > 0 ? (
+            <p className="helperText">{currentResearchEvidence.length} saved research source{currentResearchEvidence.length === 1 ? "" : "s"} attached to this account.</p>
+          ) : null}
           {isPreviewLocation ? (
             <p className="helperText">
               Preview mode is active because pipeline storage is not available yet. You can review contacts and run research, but notes, pipeline fields, and queued emails are disabled until the DB migration is run.
@@ -1119,6 +1141,21 @@ export function LocationDetail({
                                 <span>Follow-up status: {research.sequenceError}</span>
                               ) : null}
                             </div>
+                            {research.pitch.researchEvidence?.length ? (
+                              <div className="evidenceStrip">
+                                {research.pitch.researchEvidence.slice(0, 3).map((item, index) => (
+                                  <a
+                                    key={`${item.sourceUrl || item.sourceTitle || index}-${index}`}
+                                    href={item.sourceUrl || "#"}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="evidenceChip"
+                                  >
+                                    {item.sourceTitle || `Source ${index + 1}`}
+                                  </a>
+                                ))}
+                              </div>
+                            ) : null}
                             <div className="inlineActions">
                               <button
                                 className="secondaryButton"

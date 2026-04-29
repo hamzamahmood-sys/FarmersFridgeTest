@@ -2,7 +2,9 @@ import { google } from "googleapis";
 import { auth } from "@/auth";
 import { getPool } from "@/lib/db";
 import { env } from "@/lib/env";
-import type { GmailDraftPayload } from "@/lib/types";
+import type { GmailDraftPayload, StoredEmail } from "@/lib/types";
+
+const GMAIL_READ_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
 
 type AccountTokens = {
   access_token: string | null;
@@ -89,6 +91,12 @@ async function getAuthorizedGmailClient() {
   return google.gmail({ version: "v1", auth: oauth2Client });
 }
 
+function requireReadScope(scope: string | null | undefined): void {
+  if (!scope?.includes(GMAIL_READ_SCOPE)) {
+    throw new Error("Gmail sync needs read-only scope. Reauthorize Gmail from the Emails page, then try sync again.");
+  }
+}
+
 function assertHeaderSafe(value: string, headerName: string): void {
   if (/[\r\n]/.test(value)) {
     throw new Error(`${headerName} cannot contain line breaks.`);
@@ -131,4 +139,123 @@ export async function createGmailDraft(payload: GmailDraftPayload) {
   });
 
   return draft.data;
+}
+
+function gmailSearchEscape(value: string): string {
+  return value.replace(/"/g, "");
+}
+
+async function getMessageInternalDate(gmail: ReturnType<typeof google.gmail>, messageId: string): Promise<string | undefined> {
+  const message = await gmail.users.messages.get({
+    userId: "me",
+    id: messageId,
+    format: "metadata",
+    metadataHeaders: ["Subject", "From", "To", "Date"]
+  });
+  const internalDate = message.data.internalDate;
+  return internalDate ? new Date(Number(internalDate)).toISOString() : undefined;
+}
+
+async function findFirstMessage(
+  gmail: ReturnType<typeof google.gmail>,
+  query: string
+): Promise<{ id?: string; threadId?: string; internalDate?: string } | null> {
+  const result = await gmail.users.messages.list({
+    userId: "me",
+    q: query,
+    maxResults: 1
+  });
+  const message = result.data.messages?.[0];
+  if (!message?.id) return null;
+  const internalDate = await getMessageInternalDate(gmail, message.id);
+  return {
+    id: message.id,
+    threadId: message.threadId || undefined,
+    internalDate
+  };
+}
+
+export type GmailSyncResult = {
+  checked: number;
+  updated: number;
+  replied: number;
+  sent: number;
+  errors: string[];
+};
+
+export async function syncGmailStatusesForEmails(userId: number, emails: StoredEmail[]): Promise<GmailSyncResult> {
+  const tokens = await getAccountTokensForCurrentUser();
+  requireReadScope(tokens.scope);
+  const gmail = await getAuthorizedGmailClient();
+  const result: GmailSyncResult = { checked: 0, updated: 0, replied: 0, sent: 0, errors: [] };
+
+  for (const email of emails.slice(0, 50)) {
+    if (!email.contactEmail) continue;
+    result.checked += 1;
+
+    try {
+      const subject = gmailSearchEscape(email.subject);
+      const contact = gmailSearchEscape(email.contactEmail);
+      const sentQuery = `in:sent to:${contact} subject:"${subject}" newer_than:365d`;
+      const replyQuery = `from:${contact} subject:"${subject}" newer_than:365d`;
+      const [sentMessage, replyMessage] = await Promise.all([
+        findFirstMessage(gmail, sentQuery),
+        findFirstMessage(gmail, replyQuery)
+      ]);
+
+      const updates: Partial<StoredEmail> = {};
+      if (sentMessage?.id) {
+        updates.status = email.status === "replied" ? "replied" : "sent";
+        updates.sentAt = email.sentAt || sentMessage.internalDate || new Date().toISOString();
+        updates.gmailMessageId = email.gmailMessageId || sentMessage.id;
+        updates.gmailThreadId = email.gmailThreadId || sentMessage.threadId;
+        result.sent += 1;
+      }
+
+      if (replyMessage?.id) {
+        updates.status = "replied";
+        updates.replyDetectedAt = email.replyDetectedAt || replyMessage.internalDate || new Date().toISOString();
+        updates.gmailThreadId = email.gmailThreadId || replyMessage.threadId;
+        result.replied += 1;
+      }
+
+      if (Object.keys(updates).length > 0) {
+        const sets: string[] = [];
+        const params: unknown[] = [];
+
+        if (updates.status) {
+          params.push(updates.status);
+          sets.push(`status = $${params.length}`);
+        }
+        if (updates.sentAt !== undefined) {
+          params.push(updates.sentAt || null);
+          sets.push(`sent_at = $${params.length}`);
+        }
+        if (updates.replyDetectedAt !== undefined) {
+          params.push(updates.replyDetectedAt || null);
+          sets.push(`reply_detected_at = $${params.length}`);
+        }
+        if (updates.gmailMessageId !== undefined) {
+          params.push(updates.gmailMessageId || null);
+          sets.push(`gmail_message_id = $${params.length}`);
+        }
+        if (updates.gmailThreadId !== undefined) {
+          params.push(updates.gmailThreadId || null);
+          sets.push(`gmail_thread_id = $${params.length}`);
+        }
+
+        params.push(email.id, userId);
+        await getPool().query(
+          `UPDATE emails SET ${sets.join(", ")}, updated_at = NOW()
+           WHERE id = $${params.length - 1} AND user_id = $${params.length}`,
+          params
+        );
+        result.updated += 1;
+      }
+    } catch (error) {
+      result.errors.push(error instanceof Error ? error.message : `Failed to sync ${email.subject}`);
+    }
+  }
+
+  return result;
 }

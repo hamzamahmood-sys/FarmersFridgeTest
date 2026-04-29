@@ -31,7 +31,11 @@ const leadSchema = z.object({
   linkedinUrl: z.string().optional(),
   companyName: z.string(),
   companyDomain: z.string().optional(),
-  organizationId: z.string().optional()
+  organizationId: z.string().optional(),
+  department: z.enum(["facilities", "hr_people", "workplace", "fnb", "csuite", "other"]).optional(),
+  locationId: z.string().optional(),
+  source: z.enum(["apollo", "ai"]).optional(),
+  emailSource: z.enum(["apollo", "tomba", "ai", "existing"]).optional()
 });
 
 const payloadSchema = z.object({

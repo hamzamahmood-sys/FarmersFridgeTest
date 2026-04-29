@@ -8,7 +8,7 @@ Next.js app that connects Apollo.io, OpenAI, and Gmail into a lead-to-draft work
 2. Generate `AUTH_SECRET`: `openssl rand -base64 32`.
 3. In Google Cloud:
    - Enable the Gmail API.
-   - OAuth consent screen scopes: `openid`, `email`, `profile`, `https://www.googleapis.com/auth/gmail.compose`.
+   - OAuth consent screen scopes: `openid`, `email`, `profile`, `https://www.googleapis.com/auth/gmail.compose`, `https://www.googleapis.com/auth/gmail.readonly`.
    - Authorized redirect URI: `http://localhost:3000/api/auth/callback/google` (and your production URL).
 4. Run the schema: `node scripts/migrate.cjs` (reads `DATABASE_URL`).
 
@@ -33,7 +33,9 @@ You'll be redirected to `/signin` — sign in with Google. The same consent gran
 - Optional Tomba fallback finds emails when Apollo has none.
 - OpenAI generates a personalized subject, body, bridge insight, and editable talking points.
 - The user can edit talking points before draft creation.
-- Gmail draft is created using the signed-in user's Google tokens via `users.drafts.create`.
+- Placement fit scoring highlights the best accounts by delivery zone, location type, employee count, and food/access signals.
+- Outreach sequences carry scheduled dates, quality scores, Gmail draft/message/thread IDs, sent timestamps, and reply detection timestamps.
+- Gmail draft is created using the signed-in user's Google tokens via `users.drafts.create`; Gmail sync uses read-only access to detect sent messages and replies.
 
 ## Scripts
 
@@ -48,3 +50,4 @@ You'll be redirected to `/signin` — sign in with Google. The same consent gran
 - Lead prioritization boosts HQ matches in Chicago, NYC, and New Jersey.
 - Credit transparency: UI shows 1 Apollo operation per search (the mixed_people search is free).
 - Google refresh tokens are stored on the `accounts` row (Auth.js pg adapter) and rotated automatically when the Gmail client refreshes.
+- Reauthorize Gmail after adding the read-only scope so existing accounts can use sent/reply sync.

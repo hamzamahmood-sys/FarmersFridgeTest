@@ -34,6 +34,7 @@ export type {
 
 export type GmailStatus = {
   connected: boolean;
+  canSync: boolean;
   scope: string | null;
   expiresAt: number | null;
 };
@@ -68,5 +69,15 @@ export type EmailLookupState = "idle" | "looking" | "found" | "not_found";
 export type EmailSource = "existing" | "apollo" | "tomba" | "ai" | "none";
 export type NavPage = "dashboard" | "contacts" | "emails" | "tone";
 export type SearchMode = "search" | "bulk";
-export type EmailFilter = "all" | "generated" | "approved" | "sent";
+export type EmailFilter =
+  | "all"
+  | "due_today"
+  | "missing_email"
+  | "generated"
+  | "needs_edits"
+  | "approved"
+  | "scheduled"
+  | "drafted"
+  | "sent"
+  | "replied";
 export type DepartmentFilter = "all" | "facilities" | "hr_people" | "workplace" | "fnb" | "csuite" | "other";

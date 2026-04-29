@@ -5,7 +5,17 @@ import { z, ZodError } from "zod";
 import { listEmails, replaceEmailsForLead } from "@/lib/db";
 import { AuthRequired, resolveCurrentUserId } from "@/lib/auth-user";
 
-const emailStatusSchema = z.enum(["generated", "approved", "sent", "all"]);
+const emailStatusSchema = z.enum([
+  "generated",
+  "needs_edits",
+  "approved",
+  "scheduled",
+  "drafted",
+  "sent",
+  "replied",
+  "all"
+]);
+const storedEmailStatusSchema = emailStatusSchema.exclude(["all"]);
 const locationTypeSchema = z.enum(["hospital", "corporate", "university", "gym", "airport", "other"]);
 
 const createSequenceSchema = z.object({
@@ -22,8 +32,14 @@ const createSequenceSchema = z.object({
         sequenceStep: z.number().int().min(1).max(3),
         subject: z.string().min(1),
         body: z.string().min(1),
-        status: z.enum(["generated", "approved", "sent"]).optional(),
-        gmailDraftUrl: z.string().optional()
+        status: storedEmailStatusSchema.optional(),
+        gmailDraftUrl: z.string().optional(),
+        gmailDraftId: z.string().optional(),
+        gmailMessageId: z.string().optional(),
+        gmailThreadId: z.string().optional(),
+        scheduledFor: z.string().datetime().optional(),
+        sentAt: z.string().datetime().optional(),
+        replyDetectedAt: z.string().datetime().optional()
       })
     )
     .min(1)

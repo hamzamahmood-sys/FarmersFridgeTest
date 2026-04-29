@@ -47,6 +47,10 @@ export function OutreachDashboard() {
     locationsCount: 0,
     draftsCount: 0,
     wonCount: 0,
+    dueTodayCount: 0,
+    repliedCount: 0,
+    highFitCount: 0,
+    averageFitScore: 0,
     pipelineByStage: { prospect: 0, meeting: 0, won: 0, lost: 0 },
     byLocationType: { hospital: 0, corporate: 0, university: 0, gym: 0, airport: 0, other: 0 }
   });
@@ -206,7 +210,7 @@ export function OutreachDashboard() {
       if (isPipelineStorageError(message)) {
         const previewLocation = companyToPreviewLocation(company);
         setSelectedLocationId(previewLocation.id);
-        setLocationDetail({ location: previewLocation, contacts: [], emails: [] });
+        setLocationDetail({ location: previewLocation, contacts: [], emails: [], researchEvidence: [] });
         setActivePage("contacts");
         setPageError(null);
         setPageSuccess("Opened in preview mode. Pipeline saving is unavailable until the database migration is run.");
@@ -274,7 +278,7 @@ export function OutreachDashboard() {
       setLocationDetail((current) =>
         current && current.location.id === location.id
           ? { ...current, contacts: data.leads ?? [] }
-          : { location, contacts: data.leads ?? [], emails: preservedEmails }
+          : { location, contacts: data.leads ?? [], emails: preservedEmails, researchEvidence: [] }
       );
 
       await Promise.all([loadLocations(), loadDashboard()]);

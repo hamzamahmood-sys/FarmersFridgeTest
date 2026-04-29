@@ -2036,6 +2036,25 @@ textarea {
   margin-top: 18px;
 }
 
+.fitReasonLine {
+  margin: 12px 0 0;
+  color: var(--ff-ink-soft);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.fitReasonList {
+  margin: 14px 0 0;
+  padding-left: 18px;
+  color: var(--ff-ink-soft);
+  line-height: 1.65;
+  font-size: 0.9rem;
+}
+
+.fitReasonList li::marker {
+  color: var(--ff-gold);
+}
+
 .cardActionRow {
   display: flex;
   align-items: center;
@@ -2179,9 +2198,11 @@ textarea {
   border: 1px solid var(--ff-line);
   border-radius: var(--ff-radius-sm);
   background: #fff;
-  padding: 16px;
+  padding: 0;
   text-align: left;
-  cursor: pointer;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  overflow: hidden;
   transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
 }
 
@@ -2194,6 +2215,29 @@ textarea {
 .emailRowCard.active {
   border-color: var(--ff-green);
   background: linear-gradient(180deg, #ffffff 0%, var(--ff-mint) 100%);
+}
+
+.emailRowCheck {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 18px;
+  border-right: 1px solid var(--ff-line-soft);
+  background: rgba(0, 71, 51, 0.025);
+}
+
+.emailRowCheck input {
+  accent-color: var(--ff-green);
+}
+
+.emailRowButton {
+  display: block;
+  min-width: 0;
+  padding: 16px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
 }
 
 .emailRowTop {
@@ -2225,6 +2269,65 @@ textarea {
   line-height: 1.55;
 }
 
+.bulkActionBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 0 18px 16px;
+  border-bottom: 1px solid var(--ff-line-soft);
+  margin-bottom: 16px;
+}
+
+.qualityPanel {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+  margin-top: 20px;
+  padding: 18px;
+  border: 1px solid var(--ff-line);
+  border-radius: var(--ff-radius-sm);
+  background: var(--ff-cream-warm);
+}
+
+.qualityPanel strong {
+  display: block;
+  font-family: var(--ff-font-serif);
+  font-size: 2.4rem;
+  line-height: 1;
+  font-weight: 400;
+  color: var(--ff-green-deep);
+}
+
+.qualityPanel span,
+.qualityPanel p {
+  color: var(--ff-ink-soft);
+  font-size: 0.86rem;
+  margin: 6px 0 0;
+}
+
+.evidenceStrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.evidenceChip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 220px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--ff-line);
+  background: #fff;
+  color: var(--ff-green-deep);
+  font-size: 0.78rem;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .statusBadge {
   display: inline-flex;
   align-items: center;
@@ -2243,14 +2346,34 @@ textarea {
   color: #2a56c6;
 }
 
+.statusBadge--needs_edits {
+  background: #fbe8e4;
+  color: #9f2a1b;
+}
+
 .statusBadge--approved {
   background: var(--ff-mint);
   color: var(--ff-green-deep);
 }
 
+.statusBadge--scheduled {
+  background: #efe7d7;
+  color: #7a5415;
+}
+
+.statusBadge--drafted {
+  background: #ece5fb;
+  color: #4a2c9a;
+}
+
 .statusBadge--sent {
   background: #f6ecd4;
   color: #7a5415;
+}
+
+.statusBadge--replied {
+  background: #dff5e7;
+  color: #0b6a3a;
 }
 
 .summaryList {

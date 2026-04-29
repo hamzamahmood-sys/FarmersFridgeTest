@@ -10,6 +10,7 @@ import type {
   DepartmentFilter
 } from "./types";
 import { LayoutDashboard, Mail, Search, Sparkles } from "lucide-react";
+import { calculatePlacementFit } from "@/lib/fit-score";
 
 export const navItems: Array<{ id: NavPage; label: string; icon: typeof LayoutDashboard }> = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -51,10 +52,14 @@ export const PITCH_TYPE_LABELS: Record<PitchType, string> = {
   catering: "Catering"
 };
 
-export const EMAIL_STATUS_LABELS: Record<Exclude<EmailFilter, "all">, string> = {
+export const EMAIL_STATUS_LABELS: Record<Exclude<EmailFilter, "all" | "due_today" | "missing_email">, string> = {
   generated: "Generated",
   approved: "Approved",
-  sent: "Sent"
+  needs_edits: "Needs Edits",
+  scheduled: "Scheduled",
+  drafted: "Drafted",
+  sent: "Sent",
+  replied: "Replied"
 };
 
 export const DEPARTMENT_FILTER_LABELS: Record<Exclude<DepartmentFilter, "all">, string> = {
@@ -87,6 +92,20 @@ export function locationToProspectCompany(location: SavedLocation): ProspectComp
 }
 
 export function companyToPreviewLocation(company: ProspectCompany): SavedLocation {
+  const locationType = "other";
+  const fit = calculatePlacementFit({
+    companyName: company.name,
+    industry: company.company.industry,
+    employeeCount: company.company.employeeCount,
+    hqCity: company.company.hqCity,
+    hqState: company.company.hqState,
+    about: company.company.about,
+    category: company.company.industry,
+    locationType,
+    deliveryZone: company.company.deliveryZone,
+    keywords: company.company.keywords
+  });
+
   return {
     id: `preview:${company.id}`,
     organizationId: company.id,
@@ -99,11 +118,13 @@ export function companyToPreviewLocation(company: ProspectCompany): SavedLocatio
     hqCountry: company.company.hqCountry,
     about: company.company.about,
     category: company.company.industry,
-    locationType: "other",
+    locationType,
     pipelineStage: "prospect",
     pitchType: "farmers_fridge",
     notes: "",
     deliveryZone: company.company.deliveryZone,
+    fitScore: fit.score,
+    fitReasons: fit.reasons,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
@@ -132,8 +153,18 @@ export function isPipelineStorageError(message: string): boolean {
 }
 
 export function filteredEmails(emails: StoredEmail[], emailFilter: EmailFilter, emailSearch: string): StoredEmail[] {
+  const now = new Date();
+  const endOfToday = new Date(now);
+  endOfToday.setHours(23, 59, 59, 999);
+
   return emails.filter((email) => {
-    const matchesFilter = emailFilter === "all" || email.status === emailFilter;
+    const matchesFilter =
+      emailFilter === "all" ||
+      (emailFilter === "due_today"
+        ? Boolean(email.scheduledFor && new Date(email.scheduledFor) <= endOfToday && !["sent", "replied"].includes(email.status))
+        : emailFilter === "missing_email"
+          ? !email.contactEmail
+          : email.status === emailFilter);
     const matchesSearch = emailSearch.trim()
       ? [email.subject, email.body, email.companyName, email.contactName, email.contactEmail]
           .filter(Boolean)

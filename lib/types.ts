@@ -79,12 +79,35 @@ export interface GeneratedPitch {
   summary: string;
   painPoints: string[];
   variableEvidence: string[];
+  researchEvidence?: ResearchEvidence[];
 }
 
 export interface GmailDraftPayload {
   to: string;
   subject: string;
   body: string;
+}
+
+export interface PlacementFit {
+  score: number;
+  reasons: string[];
+}
+
+export interface ResearchEvidence {
+  id?: string;
+  userId?: number;
+  locationId?: string;
+  leadId?: string;
+  sourceTitle?: string;
+  sourceUrl?: string;
+  snippet: string;
+  confidence?: number;
+  createdAt?: string;
+}
+
+export interface EmailQuality {
+  score: number;
+  issues: string[];
 }
 
 // ─── Saved locations + pipeline ──────────────────────────────────────────────
@@ -126,6 +149,8 @@ export interface SavedLocation {
   pitchType: PitchType;
   notes?: string;
   deliveryZone: DeliveryZone;
+  fitScore: number;
+  fitReasons: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -139,13 +164,24 @@ export interface DashboardStats {
   locationsCount: number;
   draftsCount: number;
   wonCount: number;
+  dueTodayCount: number;
+  repliedCount: number;
+  highFitCount: number;
+  averageFitScore: number;
   pipelineByStage: Record<PipelineStage, number>;
   byLocationType: Record<LocationType, number>;
 }
 
 // ─── Emails ──────────────────────────────────────────────────────────────────
 
-export type EmailStatus = "generated" | "approved" | "sent";
+export type EmailStatus =
+  | "generated"
+  | "needs_edits"
+  | "approved"
+  | "scheduled"
+  | "drafted"
+  | "sent"
+  | "replied";
 
 export interface StoredEmail {
   id: string;
@@ -161,6 +197,14 @@ export interface StoredEmail {
   body: string;
   status: EmailStatus;
   gmailDraftUrl?: string;
+  gmailDraftId?: string;
+  gmailMessageId?: string;
+  gmailThreadId?: string;
+  scheduledFor?: string;
+  sentAt?: string;
+  replyDetectedAt?: string;
+  qualityScore: number;
+  qualityIssues: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -169,6 +213,7 @@ export interface LocationDetail {
   location: SavedLocation;
   contacts: LeadRecord[];
   emails: StoredEmail[];
+  researchEvidence: ResearchEvidence[];
 }
 
 // ─── Tone of voice ───────────────────────────────────────────────────────────

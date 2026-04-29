@@ -48,16 +48,16 @@ export function DashboardPage({ stats, recentLocations, pageError, pageSuccess, 
           <strong>{stats.locationsCount}</strong>
         </article>
         <article className="statCard">
-          <span>Emails</span>
-          <strong>{stats.draftsCount}</strong>
+          <span>Due Today</span>
+          <strong>{stats.dueTodayCount}</strong>
         </article>
         <article className="statCard">
-          <span>Won</span>
-          <strong>{stats.wonCount}</strong>
+          <span>Replies</span>
+          <strong>{stats.repliedCount}</strong>
         </article>
         <article className="statCard">
-          <span>Meetings</span>
-          <strong>{stats.pipelineByStage.meeting}</strong>
+          <span>Avg Fit</span>
+          <strong>{stats.averageFitScore}</strong>
         </article>
       </section>
 
@@ -114,7 +114,11 @@ export function DashboardPage({ stats, recentLocations, pageError, pageSuccess, 
                   <div className="locationCounts">
                     <span>{location.contactsCount} contacts</span>
                     <span>{location.emailsCount} emails</span>
+                    <span>{location.fitScore} fit</span>
                   </div>
+                  {location.fitReasons.length > 0 ? (
+                    <p className="fitReasonLine">{location.fitReasons.slice(0, 2).join(" · ")}</p>
+                  ) : null}
                 </div>
                 <button className="iconButton" type="button" onClick={() => onOpenLocation(location.id)}>
                   <ArrowRight size={16} />

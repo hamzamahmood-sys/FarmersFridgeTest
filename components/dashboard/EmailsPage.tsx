@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useEffect, useTransition } from "react";
-import { ArrowUpRight, Copy, Download, Mail, Send } from "lucide-react";
+import { ArrowUpRight, CheckSquare, Copy, Download, Mail, RefreshCw, Send } from "lucide-react";
 import type { EmailFilter, GmailStatus, StoredEmail } from "./types";
 import { EMAIL_STATUS_LABELS, filteredEmails, getStatusClass } from "./utils";
 
@@ -29,13 +29,16 @@ export function EmailsPage({
   const [emailFilter, setEmailFilter] = useState<EmailFilter>("all");
   const [emailSearch, setEmailSearch] = useState("");
   const [selectedEmailId, setSelectedEmailId] = useState<string | null>(null);
+  const [selectedEmailIds, setSelectedEmailIds] = useState<Set<string>>(new Set());
   const [emailEditor, setEmailEditor] = useState<{
     subject: string;
     body: string;
-    status: Exclude<EmailFilter, "all">;
-  }>({ subject: "", body: "", status: "generated" });
+    status: StoredEmail["status"];
+    scheduledFor: string;
+  }>({ subject: "", body: "", status: "generated", scheduledFor: "" });
   const [savePending, startSaveTransition] = useTransition();
   const [draftPending, startDraftTransition] = useTransition();
+  const [bulkPending, startBulkTransition] = useTransition();
 
   const visibleEmailRows = useMemo(
     () => filteredEmails(emails, emailFilter, emailSearch),
@@ -49,15 +52,42 @@ export function EmailsPage({
 
   useEffect(() => {
     if (!selectedEmail) {
-      setEmailEditor({ subject: "", body: "", status: "generated" });
+      setEmailEditor({ subject: "", body: "", status: "generated", scheduledFor: "" });
       return;
     }
     setEmailEditor({
       subject: selectedEmail.subject,
       body: selectedEmail.body,
-      status: selectedEmail.status
+      status: selectedEmail.status,
+      scheduledFor: selectedEmail.scheduledFor ? toDatetimeLocalValue(selectedEmail.scheduledFor) : ""
     });
-  }, [selectedEmail?.id, selectedEmail?.subject, selectedEmail?.body, selectedEmail?.status]);
+  }, [selectedEmail?.id, selectedEmail?.subject, selectedEmail?.body, selectedEmail?.status, selectedEmail?.scheduledFor]);
+
+  const selectedCount = selectedEmailIds.size;
+
+  function toDatetimeLocalValue(value: string): string {
+    const date = new Date(value);
+    const offsetMs = date.getTimezoneOffset() * 60_000;
+    return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+  }
+
+  function fromDatetimeLocalValue(value: string): string | undefined {
+    if (!value) return undefined;
+    return new Date(value).toISOString();
+  }
+
+  function toggleSelectedEmail(emailId: string, checked: boolean) {
+    setSelectedEmailIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(emailId);
+      else next.delete(emailId);
+      return next;
+    });
+  }
+
+  function selectVisibleEmails() {
+    setSelectedEmailIds(new Set(visibleEmailRows.map((email) => email.id)));
+  }
 
   function downloadCSV(filename: string, rows: Array<Array<string | number>>) {
     const csv = rows
@@ -74,7 +104,7 @@ export function EmailsPage({
 
   function exportEmailsCSV() {
     const rows = [
-      ["Company", "Contact", "Email", "Title", "Step", "Status", "Subject", "Body"],
+      ["Company", "Contact", "Email", "Title", "Step", "Status", "Scheduled For", "Quality Score", "Quality Issues", "Subject", "Body"],
       ...visibleEmailRows.map((email) => [
         email.companyName || "",
         email.contactName || "",
@@ -82,6 +112,9 @@ export function EmailsPage({
         email.contactTitle || "",
         email.sequenceStep,
         email.status,
+        email.scheduledFor || "",
+        email.qualityScore,
+        email.qualityIssues.join("; "),
         email.subject,
         email.body
       ])
@@ -111,7 +144,10 @@ export function EmailsPage({
         const response = await fetch(`/api/emails/${selectedEmail.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(emailEditor)
+          body: JSON.stringify({
+            ...emailEditor,
+            scheduledFor: fromDatetimeLocalValue(emailEditor.scheduledFor)
+          })
         });
 
         const data = (await response.json()) as { email?: StoredEmail; error?: string };
@@ -127,53 +163,150 @@ export function EmailsPage({
     });
   }
 
-  function createGmailDraftForSelectedEmail() {
-    if (!selectedEmail) return;
-    if (!selectedEmail.contactEmail) {
-      setPageError("This sequence does not have a contact email yet, so Gmail draft creation is unavailable.");
-      return;
+  async function createGmailDraftForEmail(email: StoredEmail, overrides?: { subject?: string; body?: string }) {
+    if (!email.contactEmail) {
+      throw new Error(`${email.contactName || email.companyName || "Selected email"} is missing a contact email.`);
     }
 
+    const subject = overrides?.subject ?? email.subject;
+    const body = overrides?.body ?? email.body;
+    const response = await fetch("/api/gmail/drafts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        to: email.contactEmail,
+        subject,
+        body
+      })
+    });
+
+    const data = (await response.json()) as {
+      draftId?: string;
+      messageId?: string;
+      threadId?: string;
+      gmailUrl?: string;
+      error?: string;
+    };
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to create Gmail draft.");
+    }
+
+    const patchResponse = await fetch(`/api/emails/${email.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        subject,
+        body,
+        status: "drafted",
+        gmailDraftUrl: data.gmailUrl || "https://mail.google.com/mail/u/0/#drafts",
+        gmailDraftId: data.draftId,
+        gmailMessageId: data.messageId,
+        gmailThreadId: data.threadId
+      })
+    });
+
+    const patchData = (await patchResponse.json()) as { email?: StoredEmail; error?: string };
+    if (!patchResponse.ok || !patchData.email) {
+      throw new Error(patchData.error || "Failed to update email after draft creation.");
+    }
+  }
+
+  function createGmailDraftForSelectedEmail() {
+    if (!selectedEmail) return;
     setPageError(null);
     setPageSuccess(null);
 
     startDraftTransition(async () => {
       try {
-        const response = await fetch("/api/gmail/drafts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            to: selectedEmail.contactEmail,
-            subject: emailEditor.subject,
-            body: emailEditor.body
-          })
+        await createGmailDraftForEmail(selectedEmail, {
+          subject: emailEditor.subject,
+          body: emailEditor.body
         });
-
-        const data = (await response.json()) as { gmailUrl?: string; error?: string };
-        if (!response.ok) {
-          throw new Error(data.error || "Failed to create Gmail draft.");
-        }
-
-        const patchResponse = await fetch(`/api/emails/${selectedEmail.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            subject: emailEditor.subject,
-            body: emailEditor.body,
-            status: "approved",
-            gmailDraftUrl: data.gmailUrl || "https://mail.google.com/mail/u/0/#drafts"
-          })
-        });
-
-        const patchData = (await patchResponse.json()) as { email?: StoredEmail; error?: string };
-        if (!patchResponse.ok || !patchData.email) {
-          throw new Error(patchData.error || "Failed to update email after draft creation.");
-        }
-
         await Promise.all([onEmailsChanged(), onGmailStatusChanged()]);
         setPageSuccess("Draft created in Gmail.");
       } catch (error) {
         setPageError(error instanceof Error ? error.message : "Failed to create Gmail draft.");
+      }
+    });
+  }
+
+  function updateSelectedStatus(status: StoredEmail["status"]) {
+    const targetIds = selectedEmailIds.size > 0 ? [...selectedEmailIds] : selectedEmail ? [selectedEmail.id] : [];
+    if (targetIds.length === 0) return;
+    setPageError(null);
+    setPageSuccess(null);
+
+    startBulkTransition(async () => {
+      try {
+        await Promise.all(
+          targetIds.map((id) =>
+            fetch(`/api/emails/${id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ status })
+            }).then(async (response) => {
+              if (!response.ok) {
+                const data = (await response.json()) as { error?: string };
+                throw new Error(data.error || "Failed to update selected emails.");
+              }
+            })
+          )
+        );
+        await onEmailsChanged();
+        setPageSuccess(`${targetIds.length} email${targetIds.length === 1 ? "" : "s"} marked ${EMAIL_STATUS_LABELS[status].toLowerCase()}.`);
+      } catch (error) {
+        setPageError(error instanceof Error ? error.message : "Failed to update selected emails.");
+      }
+    });
+  }
+
+  function createDraftsForSelected() {
+    const targetEmails = visibleEmailRows.filter((email) => selectedEmailIds.has(email.id));
+    if (targetEmails.length === 0) {
+      setPageError("Select at least one email to create Gmail drafts.");
+      return;
+    }
+    setPageError(null);
+    setPageSuccess(null);
+
+    startBulkTransition(async () => {
+      try {
+        let created = 0;
+        for (const email of targetEmails) {
+          await createGmailDraftForEmail(email);
+          created += 1;
+        }
+        await Promise.all([onEmailsChanged(), onGmailStatusChanged()]);
+        setPageSuccess(`${created} Gmail draft${created === 1 ? "" : "s"} created.`);
+      } catch (error) {
+        setPageError(error instanceof Error ? error.message : "Failed to create selected Gmail drafts.");
+      }
+    });
+  }
+
+  function syncGmailStatuses() {
+    const ids = selectedEmailIds.size > 0 ? [...selectedEmailIds] : visibleEmailRows.map((email) => email.id);
+    setPageError(null);
+    setPageSuccess(null);
+
+    startBulkTransition(async () => {
+      try {
+        const response = await fetch("/api/gmail/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ emailIds: ids.slice(0, 50) })
+        });
+        const data = (await response.json()) as {
+          result?: { checked: number; updated: number; replied: number; sent: number; errors: string[] };
+          error?: string;
+        };
+        if (!response.ok || !data.result) throw new Error(data.error || "Gmail sync failed.");
+        await Promise.all([onEmailsChanged(), onGmailStatusChanged()]);
+        setPageSuccess(
+          `Gmail sync checked ${data.result.checked}, updated ${data.result.updated}, found ${data.result.replied} replies.`
+        );
+      } catch (error) {
+        setPageError(error instanceof Error ? error.message : "Gmail sync failed.");
       }
     });
   }
@@ -188,10 +321,20 @@ export function EmailsPage({
         <div className="sectionControls">
           <select value={emailFilter} onChange={(event) => setEmailFilter(event.target.value as EmailFilter)}>
             <option value="all">all</option>
+            <option value="due_today">due today</option>
+            <option value="missing_email">missing email</option>
             <option value="generated">generated</option>
+            <option value="needs_edits">needs edits</option>
             <option value="approved">approved</option>
+            <option value="scheduled">scheduled</option>
+            <option value="drafted">drafted</option>
             <option value="sent">sent</option>
+            <option value="replied">replied</option>
           </select>
+          <button className="secondaryButton" type="button" onClick={syncGmailStatuses} disabled={bulkPending}>
+            <RefreshCw size={15} />
+            Sync Gmail
+          </button>
           <button className="secondaryButton" type="button" onClick={exportEmailsCSV}>
             <Download size={15} />
             Export All
@@ -206,13 +349,13 @@ export function EmailsPage({
       {pageError ? <p className="error">{pageError}</p> : null}
       {pageSuccess ? <p className="success">{pageSuccess}</p> : null}
 
-      {visibleEmailRows.length > 0 ? (
+      {emails.length > 0 ? (
         <section className="emailWorkbench">
           <div className="resultsPanel emailListPane">
             <div className="sectionHeader sectionHeader--filters">
               <div>
                 <h2>Queue</h2>
-                <p>Generated, approved, and sent sequences.</p>
+                <p>{selectedCount > 0 ? `${selectedCount} selected.` : "Scheduled, drafted, sent, and replied sequences."}</p>
               </div>
               <input
                 className="compactInput"
@@ -221,14 +364,39 @@ export function EmailsPage({
                 placeholder="Filter emails..."
               />
             </div>
+            <div className="bulkActionBar">
+              <button className="secondaryButton" type="button" onClick={selectVisibleEmails}>
+                <CheckSquare size={15} />
+                Select Visible
+              </button>
+              <button className="secondaryButton" type="button" onClick={() => setSelectedEmailIds(new Set())}>
+                Clear
+              </button>
+              <button className="secondaryButton" type="button" onClick={() => updateSelectedStatus("approved")} disabled={bulkPending}>
+                Approve
+              </button>
+              <button className="secondaryButton" type="button" onClick={() => updateSelectedStatus("scheduled")} disabled={bulkPending}>
+                Schedule
+              </button>
+              <button className="primaryButton" type="button" onClick={createDraftsForSelected} disabled={bulkPending || selectedCount === 0}>
+                <Send size={15} />
+                Draft Selected
+              </button>
+            </div>
             <div className="emailList">
               {visibleEmailRows.map((email) => (
-                <button
+                <article
                   key={email.id}
                   className={`emailRowCard ${selectedEmail?.id === email.id ? "active" : ""}`}
-                  type="button"
-                  onClick={() => setSelectedEmailId(email.id)}
                 >
+                  <label className="emailRowCheck">
+                    <input
+                      type="checkbox"
+                      checked={selectedEmailIds.has(email.id)}
+                      onChange={(event) => toggleSelectedEmail(email.id, event.target.checked)}
+                    />
+                  </label>
+                  <button className="emailRowButton" type="button" onClick={() => setSelectedEmailId(email.id)}>
                   <div className="emailRowTop">
                     <strong>{email.subject}</strong>
                     <span className={getStatusClass(email.status)}>
@@ -243,8 +411,13 @@ export function EmailsPage({
                     <span>{email.companyName || "No company"}</span>
                     <span>Step {email.sequenceStep}</span>
                   </div>
+                  <div className="emailRowMeta">
+                    <span>{email.scheduledFor ? `Due ${new Date(email.scheduledFor).toLocaleDateString()}` : "No send date"}</span>
+                    <span>{email.qualityScore ? `${email.qualityScore} quality` : "Not checked"}</span>
+                  </div>
                   <p>{email.body.slice(0, 180)}{email.body.length > 180 ? "..." : ""}</p>
-                </button>
+                  </button>
+                </article>
               ))}
             </div>
           </div>
@@ -294,15 +467,46 @@ export function EmailsPage({
                     onChange={(event) =>
                       setEmailEditor((current) => ({
                         ...current,
-                        status: event.target.value as Exclude<EmailFilter, "all">
+                        status: event.target.value as StoredEmail["status"]
                       }))
                     }
                   >
                     <option value="generated">Generated</option>
+                    <option value="needs_edits">Needs Edits</option>
                     <option value="approved">Approved</option>
+                    <option value="scheduled">Scheduled</option>
+                    <option value="drafted">Drafted</option>
                     <option value="sent">Sent</option>
+                    <option value="replied">Replied</option>
                   </select>
                 </div>
+
+                <div className="draftField">
+                  <label>Scheduled For</label>
+                  <input
+                    type="datetime-local"
+                    value={emailEditor.scheduledFor}
+                    onChange={(event) =>
+                      setEmailEditor((current) => ({ ...current, scheduledFor: event.target.value }))
+                    }
+                  />
+                </div>
+
+                <section className="qualityPanel">
+                  <div>
+                    <strong>{selectedEmail.qualityScore || 0}</strong>
+                    <span>Quality Score</span>
+                  </div>
+                  {selectedEmail.qualityIssues.length > 0 ? (
+                    <ul className="plainList">
+                      {selectedEmail.qualityIssues.map((issue) => (
+                        <li key={issue}>{issue}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p>No quality issues flagged.</p>
+                  )}
+                </section>
 
                 <div className="draftFooter">
                   {!selectedEmail.contactEmail ? (
@@ -334,7 +538,9 @@ export function EmailsPage({
                   <strong>Gmail connection</strong>
                   <p>
                     {gmailStatus?.connected
-                      ? "Gmail is connected with compose access."
+                      ? gmailStatus.canSync
+                        ? "Gmail is connected with compose and sync access."
+                        : "Gmail can create drafts. Reauthorize to enable sent/reply sync."
                       : "Connect Gmail before creating drafts. Each teammate can authorize their own mailbox from this same app."}
                   </p>
                   <div className="inlineActions">

@@ -1,10 +1,11 @@
 import { tavily } from "@tavily/core";
 import { env } from "@/lib/env";
-import type { LeadRecord } from "@/lib/types";
+import type { LeadRecord, ResearchEvidence } from "@/lib/types";
 
 export type CompanyResearch = {
   insights: string[];
   rawSnippets: string;
+  evidence: ResearchEvidence[];
 };
 
 const EXCLUDED_DOMAIN_HOSTS = new Set([
@@ -47,7 +48,9 @@ function buildQuery(record: LeadRecord): string {
   return parts.join(" ");
 }
 
-function extractInsights(results: Array<{ title?: string; content?: string; url?: string }>): string[] {
+type TavilyResult = { title?: string; content?: string; url?: string; score?: number };
+
+function extractInsights(results: TavilyResult[]): string[] {
   return results
     .slice(0, 4)
     .map((r) => {
@@ -55,6 +58,23 @@ function extractInsights(results: Array<{ title?: string; content?: string; url?
       return snippet || null;
     })
     .filter((s): s is string => typeof s === "string" && s.length > 40);
+}
+
+function extractEvidence(record: LeadRecord, results: TavilyResult[]): ResearchEvidence[] {
+  return results
+    .slice(0, 5)
+    .flatMap((result): ResearchEvidence[] => {
+      const snippet = (result.content || "").replace(/\s+/g, " ").trim().slice(0, 420);
+      if (!snippet || snippet.length < 40) return [];
+      return [{
+        locationId: record.lead.locationId,
+        leadId: record.lead.id,
+        sourceTitle: result.title?.trim() || normalizeHostname(result.url || "") || "Web source",
+        sourceUrl: result.url,
+        snippet,
+        confidence: typeof result.score === "number" ? result.score : undefined
+      }];
+    });
 }
 
 function normalizeHostname(url: string): string | null {
@@ -115,7 +135,9 @@ export async function researchCompany(record: LeadRecord): Promise<CompanyResear
       includeAnswer: true
     });
 
-    const insights = extractInsights(response.results ?? []);
+    const results = (response.results ?? []) as TavilyResult[];
+    const insights = extractInsights(results);
+    const evidence = extractEvidence(record, results);
     const answer = typeof response.answer === "string" ? response.answer.trim() : "";
 
     const rawSnippets = [
@@ -125,8 +147,8 @@ export async function researchCompany(record: LeadRecord): Promise<CompanyResear
       .filter(Boolean)
       .join("\n");
 
-    return { insights, rawSnippets };
+    return { insights, rawSnippets, evidence };
   } catch {
-    return { insights: [], rawSnippets: "" };
+    return { insights: [], rawSnippets: "", evidence: [] };
   }
 }

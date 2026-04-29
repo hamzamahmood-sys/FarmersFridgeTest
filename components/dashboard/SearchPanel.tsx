@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import { ArrowRight, Building2, Search, Trash2, Upload } from "lucide-react";
 import { CONTACT_SEARCH_INCREMENT, DEFAULT_SEARCH_FILTERS, PERSONA_LABELS } from "@/lib/constants";
+import { calculatePlacementFit } from "@/lib/fit-score";
 import type {
   ApolloCreditEstimate,
   LocationType,
@@ -392,7 +393,20 @@ export function SearchPanel({
             </div>
           </div>
           <div className="locationGrid">
-            {companies.map((company) => (
+            {companies.map((company) => {
+              const fit = calculatePlacementFit({
+                companyName: company.name,
+                industry: company.company.industry,
+                employeeCount: company.company.employeeCount,
+                hqCity: company.company.hqCity,
+                hqState: company.company.hqState,
+                about: company.company.about,
+                category: company.company.industry,
+                locationType: "other",
+                deliveryZone: company.company.deliveryZone,
+                keywords: company.company.keywords
+              });
+              return (
               <article key={company.id} className="locationCard">
                 <div className="locationCardBody">
                   <div className="locationCardTop">
@@ -401,13 +415,16 @@ export function SearchPanel({
                       <p>{company.domain || "No domain found"}</p>
                     </div>
                     <span className="confidencePill">
-                      {company.company.deliveryZone !== "Other" ? "Zone Match" : "General Fit"}
+                      {fit.score} fit
                     </span>
                   </div>
                   <div className="locationMeta">
                     <span>{company.company.industry || "Industry unavailable"}</span>
                     <span>{formatCompanyMeta(company.company) || "Location unavailable"}</span>
                   </div>
+                  {fit.reasons.length > 0 ? (
+                    <p className="fitReasonLine">{fit.reasons.slice(0, 2).join(" · ")}</p>
+                  ) : null}
                   <div className="cardActionRow">
                     <button className="secondaryButton" type="button" onClick={() => void handleSaveCompany(company)}>
                       Save to Pipeline
@@ -419,7 +436,8 @@ export function SearchPanel({
                   </div>
                 </div>
               </article>
-            ))}
+              );
+            })}
           </div>
         </section>
       ) : hasSearched ? (
@@ -484,7 +502,11 @@ export function SearchPanel({
                   <div className="locationCounts">
                     <span>{location.contactsCount} contacts</span>
                     <span>{location.emailsCount} emails</span>
+                    <span>{location.fitScore} fit</span>
                   </div>
+                  {location.fitReasons.length > 0 ? (
+                    <p className="fitReasonLine">{location.fitReasons.slice(0, 2).join(" · ")}</p>
+                  ) : null}
                   <div className="cardActionRow">
                     <span className="statusPill">{PIPELINE_STAGE_LABELS[location.pipelineStage]}</span>
                     <button

@@ -217,7 +217,8 @@ function buildFallbackPitch(record: LeadRecord, talkingPointsOverride?: string):
       "Facilities teams want an amenity that improves experience without adding cafeteria overhead.",
       "Large teams benefit from convenient food access that supports wellness and retention."
     ],
-    variableEvidence: enforced.variableEvidence
+    variableEvidence: enforced.variableEvidence,
+    researchEvidence: []
   };
 }
 
@@ -248,7 +249,8 @@ function buildFallbackFollowUpPitch(
       bridgeInsight: bridge,
       summary: "",
       painPoints: [],
-      variableEvidence: []
+      variableEvidence: [],
+      researchEvidence: []
     };
   }
 
@@ -270,7 +272,8 @@ function buildFallbackFollowUpPitch(
     bridgeInsight: bridge,
     summary: "",
     painPoints: [],
-    variableEvidence: []
+    variableEvidence: [],
+    researchEvidence: []
   };
 }
 
@@ -360,7 +363,8 @@ async function generateFollowUpPitch(
       bridgeInsight: bridge,
       summary: "",
       painPoints: [],
-      variableEvidence: []
+      variableEvidence: [],
+      researchEvidence: []
     };
   } catch (error) {
     console.warn(
@@ -481,7 +485,8 @@ export async function generatePitch(
         `${record.lead.name} appears to be a strong Farmer's Fridge contact at ${record.lead.companyName} based on their ${record.lead.title} role and the workplace amenity signals in Apollo.`
       ),
       painPoints: coerceGeneratedListValue(parsed.painPoints, fallbackPainPoints),
-      variableEvidence: enforced.variableEvidence
+      variableEvidence: enforced.variableEvidence,
+      researchEvidence: webResearch.evidence
     };
   } catch (error) {
     throw getOpenAIError(error);
