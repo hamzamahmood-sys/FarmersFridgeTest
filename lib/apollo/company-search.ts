@@ -1,4 +1,11 @@
-import { personaToApolloTitles, resolveContactDepartment, scoreCompanyFit, sortLeadRecords } from "@/lib/utils";
+import {
+  filterLeadRecordsForPersonas,
+  personaToApolloTitles,
+  resolveContactDepartment,
+  scoreCompanyFit,
+  sortLeadRecords,
+  targetDepartmentsForPersonas
+} from "@/lib/utils";
 import type { LeadRecord, ProspectCompany, SearchFilters } from "@/lib/types";
 import { apolloFetch } from "./client";
 import {
@@ -445,6 +452,14 @@ export async function searchLeadsForCompany(
 ): Promise<LeadRecord[]> {
   const personTitles = personaToApolloTitles(filters);
   const broaderTitles = [...new Set([...personTitles, ...BROAD_CONTACT_TITLES])];
+  const targetDepartments = targetDepartmentsForPersonas(filters);
+
+  const personMatchesRequestedPersona = (person: Record<string, unknown>): boolean => {
+    if (targetDepartments.length === 0) return true;
+    const title = typeof person.title === "string" ? person.title : "";
+    const department = resolveContactDepartment(undefined, title);
+    return targetDepartments.includes(department);
+  };
 
   const baseParams: Record<string, unknown> = {
     page: 1,
@@ -494,6 +509,7 @@ export async function searchLeadsForCompany(
         const rawId = person.id;
         const id = typeof rawId === "string" || typeof rawId === "number" ? String(rawId) : null;
         if (!id || seenIds.has(id)) continue;
+        if (!personMatchesRequestedPersona(person)) continue;
         seenIds.add(id);
         people.push(person);
         if (people.length >= filters.limit) break;
@@ -532,6 +548,7 @@ export async function searchLeadsForCompany(
 
     const apolloEmail = isRealApolloEmail(person.email) ? (person.email as string) : "";
     const titleValue = typeof person.title === "string" ? person.title : "Unknown Title";
+    const department = resolveContactDepartment(undefined, titleValue);
     const record: LeadRecord = {
       lead: {
         id: typeof person.id === "string" || typeof person.id === "number" ? String(person.id) : `lead-${index}`,
@@ -554,7 +571,7 @@ export async function searchLeadsForCompany(
             ? normalizeDomain(person.organization_website_url)
             : normalizeDomain(organizationPrimaryDomain) || company.domain,
         organizationId: company.id,
-        department: resolveContactDepartment(undefined, titleValue),
+        department,
         source: "apollo",
         emailSource: apolloEmail ? "apollo" : undefined
       },
@@ -571,5 +588,5 @@ export async function searchLeadsForCompany(
 
   // Keep contact loading on Apollo's free people search endpoint.
   // Paid enrichment only runs later on explicit email lookup / sequence actions.
-  return sortLeadRecords(leads);
+  return sortLeadRecords(filterLeadRecordsForPersonas(leads, filters));
 }

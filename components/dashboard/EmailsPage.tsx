@@ -270,16 +270,31 @@ export function EmailsPage({
     setPageSuccess(null);
 
     startBulkTransition(async () => {
-      try {
-        let created = 0;
-        for (const email of targetEmails) {
+      let created = 0;
+      const failures: string[] = [];
+
+      for (const email of targetEmails) {
+        try {
           await createGmailDraftForEmail(email);
           created += 1;
+        } catch (error) {
+          const label = email.contactName || email.contactEmail || email.subject;
+          failures.push(`${label}: ${error instanceof Error ? error.message : "draft failed"}`);
         }
+      }
+
+      try {
         await Promise.all([onEmailsChanged(), onGmailStatusChanged()]);
+      } catch {
+        // Drafts were already attempted; stale status can be fixed with the next refresh.
+      }
+
+      if (failures.length > 0) {
+        setPageError(`${failures.length} draft${failures.length === 1 ? "" : "s"} failed. ${failures.slice(0, 2).join(" ")}`);
+      }
+
+      if (created > 0) {
         setPageSuccess(`${created} Gmail draft${created === 1 ? "" : "s"} created.`);
-      } catch (error) {
-        setPageError(error instanceof Error ? error.message : "Failed to create selected Gmail drafts.");
       }
     });
   }

@@ -12,6 +12,14 @@ export type LeadEmailEnrichmentResult = {
   emailStatus?: string;
 };
 
+function splitFullName(name: string): { firstName: string; lastName: string } {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  return {
+    firstName: parts[0] || "",
+    lastName: parts.slice(1).join(" ")
+  };
+}
+
 export async function enrichLeadContactFromApollo(record: LeadRecord): Promise<LeadEmailEnrichmentResult> {
   const existingEmail = isRealApolloEmail(record.lead.email) ? record.lead.email : "";
 
@@ -21,20 +29,46 @@ export async function enrichLeadContactFromApollo(record: LeadRecord): Promise<L
 
   let person: Record<string, unknown> | undefined;
   const apolloPersonId = record.lead.externalId || record.lead.id;
+  const { firstName, lastName } = splitFullName(record.lead.name);
+  const matchAttempts: Array<{ label: string; params: Record<string, unknown> }> = [];
 
-  try {
-    if (record.lead.source !== "ai" && apolloPersonId && !apolloPersonId.startsWith("lead-")) {
-      const response = await apolloFetch<ApolloPersonMatchResponse>("/v1/people/match", {
+  if (record.lead.source !== "ai" && apolloPersonId && !apolloPersonId.startsWith("lead-")) {
+    matchAttempts.push({
+      label: "id",
+      params: {
         id: apolloPersonId,
         reveal_personal_emails: true
-      });
+      }
+    });
+  }
+
+  if (record.lead.name && (record.lead.companyDomain || record.lead.companyName)) {
+    matchAttempts.push({
+      label: "name-company",
+      params: {
+        name: record.lead.name,
+        first_name: firstName || undefined,
+        last_name: lastName || undefined,
+        organization_name: record.lead.companyName,
+        domain: record.lead.companyDomain,
+        linkedin_url: record.lead.linkedinUrl,
+        reveal_personal_emails: true
+      }
+    });
+  }
+
+  for (const attempt of matchAttempts) {
+    try {
+      const response = await apolloFetch<ApolloPersonMatchResponse>("/v1/people/match", attempt.params);
+      if (!response.person) continue;
       person = response.person;
+      if (isRealApolloEmail(person.email)) break;
+    } catch (error) {
+      console.warn(
+        `[Apollo enrich] people/match by ${attempt.label} failed:`,
+        error instanceof Error ? error.message : error
+      );
     }
-  } catch (error) {
-    console.warn(
-      "[Apollo enrich] people/match by id failed:",
-      error instanceof Error ? error.message : error
-    );
   }
 
   const organization = person?.organization as Record<string, unknown> | undefined;

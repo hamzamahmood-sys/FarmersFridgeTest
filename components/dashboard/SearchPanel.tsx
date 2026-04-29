@@ -29,7 +29,10 @@ type Props = {
   setPageSuccess: (msg: string | null) => void;
   onOpenLocation: (locationId: string) => void;
   onDeleteLocation: (locationId: string) => void;
-  onOpenCompany: (company: ProspectCompany) => void;
+  onOpenCompany: (
+    company: ProspectCompany,
+    contactOptions?: { personas?: SearchFilters["personas"]; customPersona?: string }
+  ) => void;
   onSaveCompany: (company: ProspectCompany) => void;
 };
 
@@ -188,7 +191,10 @@ export function SearchPanel({
 
   async function handleOpenCompany(company: ProspectCompany) {
     try {
-      onOpenCompany(company);
+      onOpenCompany(company, {
+        personas: filters.personas,
+        customPersona: filters.customPersona
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to open company.";
       setPageError(isPipelineStorageError(message)

@@ -4,9 +4,12 @@ import { NextResponse } from "next/server";
 import { z, ZodError } from "zod";
 import { searchLeadsForCompany } from "@/lib/apollo";
 import { MAX_CONTACT_SEARCH_LIMIT } from "@/lib/constants";
-import { cacheLeads, getSavedLocationById } from "@/lib/db";
+import { cacheLeads, getCachedLeads, getLocationContacts, getSavedLocationById } from "@/lib/db";
+import { filterLeadRecordsForPersonas } from "@/lib/utils";
 import { checkRateLimit, getRateLimitKey } from "@/lib/rate-limit";
 import { AuthRequired, resolveCurrentUserId } from "@/lib/auth-user";
+import { getTransientCache, setTransientCache, transientCacheKey } from "@/lib/transient-cache";
+import type { LeadRecord } from "@/lib/types";
 
 const searchFiltersSchema = z.object({
   personas: z
@@ -45,6 +48,29 @@ const bodySchema = z.object({
   locationId: z.string().min(1).optional()
 });
 
+function buildContactCachePayload(payload: z.infer<typeof bodySchema>, userId?: number) {
+  return {
+    userId,
+    companyId: payload.company.id,
+    companyName: payload.company.name,
+    personas: [...payload.filters.personas].sort(),
+    customPersona: payload.filters.customPersona?.trim().toLowerCase() || "",
+    limit: payload.filters.limit
+  };
+}
+
+function buildContactSearchQuery(payload: z.infer<typeof bodySchema>): string {
+  const cachePayload = buildContactCachePayload(payload);
+  return [
+    "contacts",
+    cachePayload.companyId,
+    cachePayload.companyName.toLowerCase(),
+    cachePayload.personas.join(","),
+    cachePayload.customPersona,
+    cachePayload.limit
+  ].join(":");
+}
+
 export async function POST(request: Request) {
   const { allowed, retryAfterMs } = checkRateLimit(getRateLimitKey(request, "by-company"), 15, 60_000);
   if (!allowed) {
@@ -58,18 +84,42 @@ export async function POST(request: Request) {
     const userId = await resolveCurrentUserId();
     const body = await request.json();
     const payload = bodySchema.parse(body);
+    const contactCachePayload = buildContactCachePayload(payload, userId);
+    const contactCacheKey = transientCacheKey("by-company", contactCachePayload);
+    const creditSafeCached = getTransientCache<LeadRecord[]>(contactCacheKey);
+    if (creditSafeCached) {
+      return NextResponse.json({ company: payload.company, leads: creditSafeCached, fromCache: true });
+    }
+    const contactSearchQuery = buildContactSearchQuery(payload);
 
     if (payload.locationId) {
       const location = await getSavedLocationById(userId, payload.locationId);
       if (!location) {
         return NextResponse.json({ error: "Location not found." }, { status: 404 });
       }
+
+      const locationContacts = filterLeadRecordsForPersonas(
+        await getLocationContacts(userId, payload.locationId),
+        payload.filters
+      ).slice(0, payload.filters.limit);
+      if (locationContacts.length >= payload.filters.limit) {
+        setTransientCache(contactCacheKey, locationContacts);
+        return NextResponse.json({ company: payload.company, leads: locationContacts, fromCache: true });
+      }
+    }
+
+    const cachedExactContacts = await getCachedLeads(userId, contactSearchQuery, 24);
+    if (cachedExactContacts && cachedExactContacts.length > 0) {
+      const leads = filterLeadRecordsForPersonas(cachedExactContacts, payload.filters).slice(0, payload.filters.limit);
+      setTransientCache(contactCacheKey, leads);
+      return NextResponse.json({ company: payload.company, leads, fromCache: true });
     }
 
     const leads = await searchLeadsForCompany(payload.filters, payload.company);
-    const persistedLeads = await cacheLeads(userId, leads, payload.searchQuery || payload.company.name, {
+    const persistedLeads = await cacheLeads(userId, leads, contactSearchQuery, {
       locationId: payload.locationId
     });
+    setTransientCache(contactCacheKey, persistedLeads);
 
     return NextResponse.json({ company: payload.company, leads: persistedLeads, fromCache: false });
   } catch (error) {

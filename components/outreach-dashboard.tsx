@@ -199,11 +199,14 @@ export function OutreachDashboard() {
     }
   }
 
-  async function handleOpenCompany(company: ProspectCompany) {
+  async function handleOpenCompany(
+    company: ProspectCompany,
+    contactOptions?: { personas?: SearchFilters["personas"]; customPersona?: string }
+  ) {
     try {
       const location = await saveCompanyToPipeline(company);
       await openLocation(location.id);
-      await loadContactsForLocation(location);
+      await loadContactsForLocation(location, contactOptions);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to open company.";
 
@@ -214,7 +217,7 @@ export function OutreachDashboard() {
         setActivePage("contacts");
         setPageError(null);
         setPageSuccess("Opened in preview mode. Pipeline saving is unavailable until the database migration is run.");
-        await loadContactsForLocation(previewLocation);
+        await loadContactsForLocation(previewLocation, contactOptions);
         return;
       }
 
@@ -478,7 +481,7 @@ export function OutreachDashboard() {
               setPageSuccess={setPageSuccess}
               onOpenLocation={(id) => void openLocation(id)}
               onDeleteLocation={(id) => void deleteLocation(id)}
-              onOpenCompany={(company) => void handleOpenCompany(company)}
+              onOpenCompany={(company, contactOptions) => void handleOpenCompany(company, contactOptions)}
               onSaveCompany={(company) => void handleSaveCompany(company)}
             />
           )

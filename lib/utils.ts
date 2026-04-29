@@ -255,6 +255,53 @@ export function resolveContactDepartment(
   return inferContactDepartment(title);
 }
 
+export function targetDepartmentsForPersonas(filters: Pick<SearchFilters, "personas" | "customPersona">): ContactDepartment[] {
+  const departments = new Set<ContactDepartment>();
+
+  for (const persona of filters.personas) {
+    switch (persona) {
+      case "office_manager":
+      case "workplace_experience":
+        departments.add("workplace");
+        break;
+      case "facilities_director":
+        departments.add("facilities");
+        break;
+      case "hr":
+        departments.add("hr_people");
+        break;
+      case "csuite":
+        departments.add("csuite");
+        break;
+      case "custom": {
+        const inferred = inferContactDepartment(filters.customPersona);
+        if (inferred !== "other") departments.add(inferred);
+        break;
+      }
+    }
+  }
+
+  return [...departments];
+}
+
+export function leadMatchesPersonaTargets(
+  record: LeadRecord,
+  filters: Pick<SearchFilters, "personas" | "customPersona">
+): boolean {
+  const targetDepartments = targetDepartmentsForPersonas(filters);
+  if (targetDepartments.length === 0) return true;
+
+  const department = resolveContactDepartment(record.lead.department, record.lead.title);
+  return targetDepartments.includes(department);
+}
+
+export function filterLeadRecordsForPersonas(
+  records: LeadRecord[],
+  filters: Pick<SearchFilters, "personas" | "customPersona">
+): LeadRecord[] {
+  return records.filter((record) => leadMatchesPersonaTargets(record, filters));
+}
+
 export function personaToApolloTitles(filters: SearchFilters): string[] {
   const titles = new Set<string>();
 

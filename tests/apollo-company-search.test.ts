@@ -190,12 +190,64 @@ describe("company-first Apollo search", () => {
       return { people: [] };
     });
 
-    const leads = await searchLeadsForCompany(marketFilters, selectedCompany);
+    const leads = await searchLeadsForCompany({ ...marketFilters, personas: ["csuite"] }, selectedCompany);
 
     expect(leads).toHaveLength(1);
     expect(leads[0]?.lead.name).toBe("Joe");
     expect(leads[0]?.lead.email).toBe("");
     expect(mockApolloFetch).not.toHaveBeenCalledWith("/v1/people/match", expect.anything());
+  });
+
+  it("does not backfill an HR-only contact search with C-suite contacts", async () => {
+    mockApolloFetch.mockResolvedValue({
+      people: [
+        {
+          id: "person-ceo",
+          first_name: "Alex",
+          last_name: "Stone",
+          title: "Chief Executive Officer",
+          has_email: true,
+          organization_id: "org-1",
+          organization_name: "Hudson Legal Group",
+          organization: {
+            name: "Hudson Legal Group",
+            primary_domain: "hudsonlegal.com",
+            industry: "Law Practice",
+            estimated_num_employees: 450,
+            city: "New York",
+            state: "New York",
+            country: "United States",
+            keywords: ["law"]
+          }
+        },
+        {
+          id: "person-hr",
+          first_name: "Pat",
+          last_name: "Rivera",
+          title: "HR Director",
+          has_email: true,
+          email: "pat@hudsonlegal.com",
+          organization_id: "org-1",
+          organization_name: "Hudson Legal Group",
+          organization: {
+            name: "Hudson Legal Group",
+            primary_domain: "hudsonlegal.com",
+            industry: "Law Practice",
+            estimated_num_employees: 450,
+            city: "New York",
+            state: "New York",
+            country: "United States",
+            keywords: ["law"]
+          }
+        }
+      ]
+    });
+
+    const leads = await searchLeadsForCompany({ ...marketFilters, personas: ["hr"] }, selectedCompany);
+
+    expect(leads).toHaveLength(1);
+    expect(leads[0]?.lead.name).toBe("Pat Rivera");
+    expect(leads[0]?.lead.department).toBe("hr_people");
   });
 
   it("tries a compact company-name variant for exact company searches", async () => {
